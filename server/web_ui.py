@@ -1,10 +1,13 @@
 """Adapter WebUI: mesma interface da NoxUI (ui.py), mas emitindo eventos WebSocket."""
+import logging
 import threading
 from collections import deque
 from pathlib import Path
 
 from server.auth import load_config
 from server.ws import Hub
+
+logger = logging.getLogger("nox.web")
 
 VALID_STATES = {"INITIALISING", "LISTENING", "THINKING", "SPEAKING", "MUTED"}
 
@@ -104,12 +107,10 @@ class WebUI:
         if not self.muted:
             self.set_state("LISTENING")
 
-    def speak(self, text: str) -> None:
-        self._handle_user_text(text)
-
     # ---------- hooks novos (opcionais para o backend) ----------
 
     def on_audio_level(self, level: float) -> None:
+        # Bypassa _emit de propósito: eventos viz são de alta frequência e não devem entrar no history.
         self.hub.broadcast({"t": "viz", "level": round(float(level), 3)})
 
     def tool_event(self, name: str, status: str, ms: int | None = None) -> None:
@@ -122,27 +123,41 @@ class WebUI:
             self.history.append(payload)
         self.hub.broadcast(payload)
 
+    def _dispatch_callback(self, text: str) -> None:
+        if not self.on_text_command:
+            return
+
+        def _run():
+            try:
+                self.on_text_command(text)
+            except Exception:
+                logger.exception("on_text_command falhou para: %.60s", text)
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def _handle_user_text(self, text: str) -> None:
         text = str(text).strip()
         if not text:
             return
         self.write_log(f"You: {text}")
-        if self.on_text_command:
-            threading.Thread(target=self.on_text_command, args=(text,), daemon=True).start()
+        self._dispatch_callback(text)
 
     def register_upload(self, path: Path) -> None:
         path = Path(path)
+        try:
+            size = _fmt_size(path.stat().st_size)
+        except OSError:
+            self.write_log(f"[Err] Upload não encontrado: {path.name}")
+            return
         self._current_file = str(path)
-        size = _fmt_size(path.stat().st_size)
         self.write_log(f"FILE: {path.name} ({size}) loaded")
-        if self.on_text_command:
-            msg = (
-                f"[FILE_UPLOADED] path={path} | name={path.name} | "
-                f"type={path.suffix.lstrip('.')} | size={size} | "
-                f"Briefly tell the user you can see the file '{path.name}' "
-                f"({size}) has been uploaded and ask what they'd like to do with it."
-            )
-            threading.Thread(target=self.on_text_command, args=(msg,), daemon=True).start()
+        msg = (
+            f"[FILE_UPLOADED] path={path} | name={path.name} | "
+            f"type={path.suffix.lstrip('.')} | size={size} | "
+            f"Briefly tell the user you can see the file '{path.name}' "
+            f"({size}) has been uploaded and ask what they'd like to do with it."
+        )
+        self._dispatch_callback(msg)
 
     def notify_config_saved(self) -> None:
         os_name = load_config().get("os_system", "windows")

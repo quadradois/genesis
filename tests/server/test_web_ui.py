@@ -107,3 +107,10 @@ def test_hooks_opcionais_emitem():
     ui.tool_event("file_controller", "ok", 400)
     assert {"t": "viz", "level": 0.5} in hub.events
     assert {"t": "tool", "name": "file_controller", "status": "ok", "ms": 400} in hub.events
+
+
+def test_register_upload_arquivo_inexistente_nao_explode(tmp_path):
+    ui, hub = make_ui()
+    ui.register_upload(tmp_path / "nada.pdf")
+    assert ui.current_file is None
+    assert any(e.get("role") == "err" for e in hub.events)
