@@ -4,6 +4,7 @@ import type { ServerEvent } from './types'
 const BACKOFF_MS = [500, 1000, 2000, 4000, 8000]
 let ws: WebSocket | null = null
 let attempt = 0
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
 export function getToken(): string | null {
   const fromUrl = new URLSearchParams(location.search).get('token')
@@ -21,24 +22,36 @@ function wsUrl(): string {
 }
 
 export function connect(): void {
+  // Guard de reentrância: StrictMode (dev) monta efeitos 2x.
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
   setConn('connecting')
-  ws = new WebSocket(wsUrl())
-  ws.onopen = () => {
+  const sock = new WebSocket(wsUrl())
+  ws = sock
+  sock.onopen = () => {
     attempt = 0
     setConn('open')
   }
-  ws.onmessage = (e) => {
+  sock.onmessage = (e) => {
     try {
       applyEvent(JSON.parse(e.data) as ServerEvent)
     } catch { /* frame inválido: ignora */ }
   }
-  ws.onclose = () => {
+  sock.onclose = () => {
+    if (ws !== sock) return // socket substituído: ignora eventos do antigo
     setConn('closed')
     const delay = BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)]
     attempt += 1
-    setTimeout(connect, delay)
+    if (reconnectTimer) clearTimeout(reconnectTimer)
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      connect()
+    }, delay)
   }
-  ws.onerror = () => ws?.close()
+  sock.onerror = () => sock.close()
 }
 
 function send(obj: unknown): void {
