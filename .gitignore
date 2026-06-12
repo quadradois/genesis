@@ -26,3 +26,4 @@ Thumbs.db
 
 # === Frontend (web UI) ===
 webui/node_modules/
+webui/*.tsbuildinfo
