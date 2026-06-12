@@ -3,6 +3,7 @@ import threading
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from server import auth
 from server.web_ui import WebUI
@@ -28,9 +29,10 @@ def env(monkeypatch, tmp_path):
 def test_ws_exige_token_quando_nao_local(env):
     ui, client, tok = env
     # TestClient conecta como host "testclient" (não-local) → sem token deve recusar
-    with pytest.raises(Exception):
+    with pytest.raises(WebSocketDisconnect) as exc_info:
         with client.websocket_connect("/ws"):
             pass
+    assert exc_info.value.code == 4401
 
 
 def test_ws_hello_e_broadcast(env):
@@ -115,3 +117,27 @@ def test_index_sem_dist_mostra_placeholder(env):
     r = client.get("/")
     assert r.status_code == 200
     assert "NOX" in r.text
+
+
+def test_upload_nome_reservado_windows_e_neutralizado(env):
+    ui, client, tok = env
+    r = client.post(
+        "/api/upload",
+        files={"file": ("NUL", b"dados reais", "application/octet-stream")},
+        headers={"x-nox-token": tok},
+    )
+    assert r.status_code == 200
+    assert ui.current_file is not None
+    assert ui.current_file.endswith("upload_NUL")
+    from pathlib import Path as _P
+    assert _P(ui.current_file).read_bytes() == b"dados reais"
+
+
+def test_json_malformado_retorna_400(env):
+    ui, client, tok = env
+    r = client.post(
+        "/api/message",
+        content=b"{json quebrado",
+        headers={"x-nox-token": tok, "content-type": "application/json"},
+    )
+    assert r.status_code == 400

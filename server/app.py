@@ -1,5 +1,7 @@
 """FastAPI da Web UI do Nox: WebSocket de eventos, REST e arquivos estáticos."""
 import asyncio
+import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import (
@@ -15,6 +17,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DIST_DIR = BASE_DIR / "webui" / "dist"
 UPLOAD_DIR = BASE_DIR / "home" / "uploads"
 
+_WIN_RESERVED = re.compile(r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$", re.IGNORECASE)
+
 _PLACEHOLDER = """<!DOCTYPE html><html><body style="background:#020611;color:#9fd8ee;
 font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh">
 <div><h1>NOX</h1><p>Build da interface ausente. Rode: <code>cd webui && npm install && npm run build</code></p></div>
@@ -27,15 +31,22 @@ def _client_host(request_or_ws) -> str | None:
 
 
 def create_app(ui) -> FastAPI:
-    app = FastAPI(title="Nox Web UI")
-
-    @app.on_event("startup")
-    async def _startup():
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI):
         ui.hub.attach_loop(asyncio.get_running_loop())
+        yield
+
+    app = FastAPI(title="Nox Web UI", lifespan=_lifespan)
 
     def _require_access(request_or_ws, token: str | None) -> None:
         if not auth.check_access(_client_host(request_or_ws), token):
             raise HTTPException(status_code=401, detail="token inválido")
+
+    async def _json_body(request: Request) -> dict:
+        try:
+            return await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="JSON inválido")
 
     # ---------- WebSocket ----------
 
@@ -75,7 +86,7 @@ def create_app(ui) -> FastAPI:
     @app.post("/api/message")
     async def post_message(request: Request, x_nox_token: str | None = Header(default=None)):
         _require_access(request, x_nox_token)
-        body = await request.json()
+        body = await _json_body(request)
         text = str(body.get("text", ""))
         if not text.strip():
             raise HTTPException(status_code=422, detail="texto vazio")
@@ -98,7 +109,7 @@ def create_app(ui) -> FastAPI:
     @app.post("/api/config")
     async def post_config(request: Request, x_nox_token: str | None = Header(default=None)):
         _require_access(request, x_nox_token)
-        body = await request.json()
+        body = await _json_body(request)
         cfg = auth.load_config()
         for key in ("gemini_api_key", "openrouter_api_key", "os_system"):
             val = str(body.get(key, "") or "").strip()
@@ -113,6 +124,8 @@ def create_app(ui) -> FastAPI:
         _require_access(request, x_nox_token)
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         safe_name = Path(file.filename or "arquivo").name
+        if not safe_name or _WIN_RESERVED.match(safe_name):
+            safe_name = f"upload_{safe_name or 'file'}"
         dest = UPLOAD_DIR / safe_name
         n = 1
         while dest.exists():
