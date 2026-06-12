@@ -20,3 +20,6 @@ env/
 # === OS / misc ===
 .DS_Store
 Thumbs.db
+
+# === Ferramentas de brainstorming (Claude) ===
+.superpowers/
