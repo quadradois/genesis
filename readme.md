@@ -40,7 +40,3 @@ Na primeira execução, copie `config/api_keys.example.json` para `config/api_ke
 | **Python** | 3.11 ou 3.12 |
 | **Microfone** | Necessário para voz |
 | **Chaves** | Gemini (grátis); OpenRouter/Moonshot opcionais |
-
-## ⚖️ Licença & Créditos
-
-Construído sobre o projeto open-source **MARK XXXIX-OR**, por **FatihMakes** ([@FatihMakes](https://www.youtube.com/@FatihMakes)), licenciado sob **[Creative Commons BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)**. Este fork (Genesis) mantém a mesma licença e atribuição. Uso pessoal e não-comercial.
