@@ -32,6 +32,19 @@ describe('store', () => {
     expect(store.getState().muted).toBe(true)
     expect(store.getState().level).toBe(0.7)
   })
+
+  it('chat respeita o teto de 500 mensagens', () => {
+    for (let i = 0; i < 510; i++) applyEvent({ t: 'chat', role: 'sys', text: `m${i}` })
+    const chat = store.getState().chat
+    expect(chat).toHaveLength(500)
+    expect(chat[0].text).toBe('m10')
+    expect(chat[499].text).toBe('m509')
+  })
+
+  it('tool com ms=0 renderiza sufixo', () => {
+    applyEvent({ t: 'tool', name: 'x', status: 'ok', ms: 0 })
+    expect(store.getState().chat[0].text).toBe('⚙ x ok · 0ms')
+  })
 })
 
 describe('mapStateToMode', () => {

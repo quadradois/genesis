@@ -22,6 +22,8 @@ export const initialState: NoxState = {
   level: 0,
 }
 
+const CHAT_CAP = 500
+
 export const store = createStore<NoxState>(() => ({ ...initialState }))
 
 export function applyEvent(ev: ServerEvent): void {
@@ -36,9 +38,11 @@ export function applyEvent(ev: ServerEvent): void {
     case 'state':
       store.setState({ state: ev.state })
       break
-    case 'chat':
-      store.setState({ chat: [...s.chat, ev] })
+    case 'chat': {
+      const next = [...s.chat, ev]
+      store.setState({ chat: next.length > CHAT_CAP ? next.slice(-CHAT_CAP) : next })
       break
+    }
     case 'mute':
       store.setState({ muted: ev.muted })
       break
@@ -48,9 +52,12 @@ export function applyEvent(ev: ServerEvent): void {
     case 'dev_tools':
       store.setState({ devTools: ev.enabled })
       break
-    case 'tool':
-      store.setState({ chat: [...s.chat, { t: 'chat', role: 'sys', text: `⚙ ${ev.name} ${ev.status}${ev.ms ? ` · ${ev.ms}ms` : ''}` }] })
+    case 'tool': {
+      const text = `⚙ ${ev.name} ${ev.status}${ev.ms != null ? ` · ${ev.ms}ms` : ''}`
+      const next = [...s.chat, { t: 'chat', role: 'sys', text } as const]
+      store.setState({ chat: next.length > CHAT_CAP ? next.slice(-CHAT_CAP) : next })
       break
+    }
   }
 }
 
