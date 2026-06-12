@@ -1,4 +1,5 @@
 import asyncio
+import threading
 
 from server.ws import Hub
 
@@ -30,4 +31,21 @@ def test_broadcast_entrega_e_remove_mortas():
         await hub._broadcast({"t": "chat", "role": "sys", "text": "oi"})
         assert ok.sent == [{"t": "chat", "role": "sys", "text": "oi"}]
         assert dead not in hub._conns
+    asyncio.run(run())
+
+
+def test_broadcast_de_outra_thread_entrega():
+    async def run():
+        hub = Hub()
+        hub.attach_loop(asyncio.get_running_loop())
+        ok = FakeWS()
+        await hub.register(ok)
+        t = threading.Thread(target=hub.broadcast, args=({"t": "viz", "level": 0.5},))
+        t.start()
+        t.join()
+        for _ in range(50):
+            if ok.sent:
+                break
+            await asyncio.sleep(0.01)
+        assert ok.sent == [{"t": "viz", "level": 0.5}]
     asyncio.run(run())
