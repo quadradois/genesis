@@ -1,0 +1,15 @@
+{
+    "api_url": "https://seudominio.com/api/v1",
+    "api_key": "",
+    "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer SUA_CHAVE_AQUI"
+    },
+    "endpoints": {
+        "properties":  "/imoveis",
+        "leads":       "/leads",
+        "appointments":"/agendamentos",
+        "clients":     "/clientes"
+    },
+    "timeout": 30
+}

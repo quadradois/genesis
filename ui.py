@@ -39,7 +39,7 @@ API_FILE   = CONFIG_DIR / "api_keys.json"
 
 _DEFAULT_W, _DEFAULT_H = 980, 700
 _MIN_W,     _MIN_H     = 820, 580
-_LEFT_W  = 148
+_LEFT_W  = 200
 _RIGHT_W = 340
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
@@ -73,15 +73,36 @@ def qcol(h: str, a: int = 255) -> QColor:
     c = QColor(h); c.setAlpha(a); return c
 
 class _SysMetrics:
+    MAX_HISTORY = 60
+    _CACHE_TTL = 5.0
+
     def __init__(self):
         self.cpu  = 0.0
         self.mem  = 0.0
-        self.net  = 0.0   
-        self.gpu  = -1.0  
-        self.tmp  = -1.0  
+        self.net  = 0.0
+        self.net_up = 0.0
+        self.net_down = 0.0
+        self.gpu  = -1.0
+        self.tmp  = -1.0
+        self.cpu_cores: list[float] = []
+        self.connections: int = 0
+        self.top_processes: list[tuple[str, float]] = []
+
+        self.cpu_history: list[float] = []
+        self.mem_history: list[float] = []
+        self.net_up_history: list[float] = []
+        self.net_down_history: list[float] = []
+        self.gpu_history: list[float] = []
+
         self._lock = threading.Lock()
         self._last_net = psutil.net_io_counters()
         self._last_net_t = time.time()
+
+        self._cached_gpu = -1.0
+        self._cached_tmp = -1.0
+        self._last_gpu_t = 0.0
+        self._last_tmp_t = 0.0
+
         self._running = True
         t = threading.Thread(target=self._loop, daemon=True)
         t.start()
@@ -92,34 +113,86 @@ class _SysMetrics:
                 self._update()
             except Exception:
                 pass
-            time.sleep(1.5)
+            time.sleep(1.0)
 
     def _update(self):
-        cpu = psutil.cpu_percent(interval=None)
+        cpu_cores = psutil.cpu_percent(interval=None, percpu=True)
+        cpu_avg = sum(cpu_cores) / len(cpu_cores) if cpu_cores else 0.0
         mem = psutil.virtual_memory().percent
 
         nc  = psutil.net_io_counters()
         now = time.time()
         dt  = now - self._last_net_t
         if dt > 0:
-            sent = (nc.bytes_sent - self._last_net.bytes_sent) / dt
-            recv = (nc.bytes_recv - self._last_net.bytes_recv) / dt
-            net  = (sent + recv) / (1024 * 1024)
+            sent_bps = (nc.bytes_sent - self._last_net.bytes_sent) / dt
+            recv_bps = (nc.bytes_recv - self._last_net.bytes_recv) / dt
+            net_up   = sent_bps / (1024 * 1024)
+            net_down = recv_bps / (1024 * 1024)
+            net      = net_up + net_down
         else:
-            net = 0.0
+            net = net_up = net_down = 0.0
         self._last_net   = nc
         self._last_net_t = now
 
-        gpu = self._get_gpu()
+        # GPU with 5s cache
+        if now - self._last_gpu_t > self._CACHE_TTL:
+            self._cached_gpu = self._get_gpu()
+            self._last_gpu_t = now
+        gpu = self._cached_gpu
 
-        tmp = self._get_temp()
+        # Temp with 5s cache
+        if now - self._last_tmp_t > self._CACHE_TTL:
+            self._cached_tmp = self._get_temp()
+            self._last_tmp_t = now
+        tmp = self._cached_tmp
+
+        try:
+            conns = len(psutil.net_connections())
+        except Exception:
+            conns = 0
+
+        top_procs = []
+        try:
+            psutil.cpu_percent(interval=0.1)
+            procs = []
+            for p in psutil.process_iter(['name', 'cpu_percent']):
+                try:
+                    n = p.info['name'] or '?'
+                    c = p.info['cpu_percent'] or 0.0
+                    procs.append((n, c))
+                except Exception:
+                    pass
+            procs.sort(key=lambda x: x[1], reverse=True)
+            top_procs = procs[:5]
+        except Exception:
+            pass
+
+        for h in [self.cpu_history, self.mem_history,
+                  self.net_up_history, self.net_down_history, self.gpu_history]:
+            h.append(0.0)
+
+        self.cpu_history[-1] = cpu_avg
+        self.mem_history[-1] = mem
+        self.net_up_history[-1] = net_up
+        self.net_down_history[-1] = net_down
+        self.gpu_history[-1] = gpu if gpu >= 0 else 0.0
+
+        for h in [self.cpu_history, self.mem_history,
+                  self.net_up_history, self.net_down_history, self.gpu_history]:
+            if len(h) > self.MAX_HISTORY:
+                del h[:-self.MAX_HISTORY]
 
         with self._lock:
-            self.cpu = cpu
+            self.cpu = cpu_avg
             self.mem = mem
             self.net = net
+            self.net_up = net_up
+            self.net_down = net_down
             self.gpu = gpu
             self.tmp = tmp
+            self.cpu_cores = cpu_cores
+            self.connections = conns
+            self.top_processes = top_procs
 
     def _get_gpu(self) -> float:
         # NVIDIA
@@ -235,17 +308,27 @@ class _SysMetrics:
                 "cpu": self.cpu,
                 "mem": self.mem,
                 "net": self.net,
+                "net_up": self.net_up,
+                "net_down": self.net_down,
                 "gpu": self.gpu,
                 "tmp": self.tmp,
+                "cpu_cores": list(self.cpu_cores),
+                "connections": self.connections,
+                "top_processes": list(self.top_processes),
+                "cpu_history": list(self.cpu_history),
+                "mem_history": list(self.mem_history),
+                "net_up_history": list(self.net_up_history),
+                "net_down_history": list(self.net_down_history),
+                "gpu_history": list(self.gpu_history),
             }
 
 
 _metrics = _SysMetrics()
 
 class HudCanvas(QWidget):
-    def __init__(self, face_path: str, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
         self.setMinimumSize(300, 300)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -254,6 +337,7 @@ class HudCanvas(QWidget):
         self.state    = "INITIALISING"
 
         self._tick       = 0
+        self._stream_phase = 0.0
         self._scale      = 1.0
         self._tgt_scale  = 1.0
         self._halo       = 55.0
@@ -266,29 +350,23 @@ class HudCanvas(QWidget):
         self._blink      = True
         self._blink_tick = 0
         self._particles: list[list[float]] = []
-        self._face_px: QPixmap | None = None
-        self._load_face(face_path)
+
+        self._orbit_angle1 = 0.0
+        self._orbit_angle2 = 60.0
+        self._orbit_angle3 = 120.0
+        self._node_pulse = 0.0
+        self._data_nodes: list[dict] = []
+        for i in range(8):
+            self._data_nodes.append({
+                "angle": i * 45.0,
+                "size": random.uniform(2, 5),
+                "speed": random.uniform(0.3, 0.8),
+                "phase": random.uniform(0, 6.28),
+            })
 
         self._tmr = QTimer(self)
         self._tmr.timeout.connect(self._step)
         self._tmr.start(16)
-
-    def _load_face(self, path: str):
-        try:
-            from PIL import Image, ImageDraw
-            import io
-            img = Image.open(path).convert("RGBA")
-            sz  = min(img.size)
-            img = img.resize((sz, sz), Image.LANCZOS)
-            mk  = Image.new("L", (sz, sz), 0)
-            ImageDraw.Draw(mk).ellipse((2, 2, sz - 2, sz - 2), fill=255)
-            img.putalpha(mk)
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            px = QPixmap(); px.loadFromData(buf.getvalue())
-            self._face_px = px
-        except Exception:
-            self._face_px = None
 
     def _step(self):
         self._tick += 1
@@ -309,12 +387,18 @@ class HudCanvas(QWidget):
         self._scale += (self._tgt_scale - self._scale) * sp
         self._halo  += (self._tgt_halo  - self._halo)  * sp
 
-        speeds = [1.3, -0.9, 2.0] if self.speaking else [0.55, -0.35, 0.9]
+        speed_mul = 2.0 if self.speaking else 1.0
+        speeds = [1.3 * speed_mul, -0.9 * speed_mul, 2.0 * speed_mul]
         for i, spd in enumerate(speeds):
             self._rings[i] = (self._rings[i] + spd) % 360
 
         self._scan  = (self._scan  + (3.0 if self.speaking else 1.3)) % 360
         self._scan2 = (self._scan2 + (-2.0 if self.speaking else -0.75)) % 360
+
+        self._orbit_angle1 = (self._orbit_angle1 + 1.2 * speed_mul) % 360
+        self._orbit_angle2 = (self._orbit_angle2 + 0.8 * speed_mul) % 360
+        self._orbit_angle3 = (self._orbit_angle3 + 1.5 * speed_mul) % 360
+        self._node_pulse = (self._node_pulse + 0.04 * speed_mul) % 6.28
 
         fw  = min(self.width(), self.height())
         lim = fw * 0.74
@@ -342,6 +426,107 @@ class HudCanvas(QWidget):
             self._blink = not self._blink
             self._blink_tick = 0
         self.update()
+
+    def _draw_avatar(self, p: QPainter, cx: float, cy: float, fw: float):
+        base_r = fw * 0.27 * self._scale
+        accent = qcol(C.MUTED_C if self.muted else (C.ACC if self.speaking else C.PRI))
+
+        def _radial(qcol_center, qcol_edge, r):
+            grad = QRadialGradient(cx, cy, r)
+            grad.setColorAt(0.0, qcol_center)
+            grad.setColorAt(0.6, qcol_center)
+            grad.setColorAt(1.0, qcol_edge)
+            return grad
+
+        # energy rings (orbit)
+        for idx, (angle, orbit_r, w, color) in enumerate([
+            (self._orbit_angle1, base_r * 1.55, 2.5, accent),
+            (self._orbit_angle2, base_r * 1.85, 2.0, qcol(C.PRI_DIM)),
+            (self._orbit_angle3, base_r * 2.10, 1.5, qcol(C.ACC2)),
+        ]):
+            rad = math.radians(angle)
+            ox = cx + orbit_r * math.cos(rad)
+            oy = cy + orbit_r * math.sin(rad) * 0.4
+            orb_a = max(0, min(255, int(self._halo * 2.2)))
+            col = QColor(color); col.setAlpha(orb_a)
+            p.setPen(QPen(col, w))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(QRectF(ox - 3, oy - 3, 6, 6))
+
+            # orbit path (subtle ellipse)
+            col_trail = QColor(color); col_trail.setAlpha(orb_a // 4)
+            p.setPen(QPen(col_trail, 1))
+            p.drawEllipse(QRectF(cx - orbit_r, cy - orbit_r * 0.4, orbit_r * 2, orbit_r * 0.8))
+
+        # outer glow layers
+        for i in range(12, 0, -1):
+            r = base_r * (1.0 + (12 - i) * 0.06)
+            frc = i / 12
+            a = max(0, min(255, int(self._halo * 1.5 * frc)))
+            if self.muted:
+                col = QColor(200, 30, 60, a)
+            elif self.speaking:
+                col = QColor(255, 120 + int(80 * frc), 0, a)
+            else:
+                col = QColor(0, int(100 + 50 * frc), int(200 + 55 * frc), a)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(col))
+            p.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2))
+
+        # core — bright center
+        core_a = max(0, min(255, int(self._halo * 3.0)))
+        if self.muted:
+            c1, c2 = QColor(180, 0, 40, core_a), QColor(80, 0, 20, 0)
+        elif self.speaking:
+            c1, c2 = QColor(255, 200, 50, core_a), QColor(255, 80, 0, 0)
+        else:
+            c1, c2 = QColor(80, 220, 255, core_a), QColor(0, 60, 140, 0)
+        core_r = base_r * 0.55
+        p.setBrush(QBrush(_radial(c1, c2, core_r)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QRectF(cx - core_r, cy - core_r, core_r * 2, core_r * 2))
+
+        # inner bright spot
+        spot_r = core_r * 0.35
+        spot_off = core_r * 0.25
+        grad2 = QRadialGradient(cx - spot_off, cy - spot_off, spot_r)
+        grad2.setColorAt(0.0, QColor(255, 255, 255, 180))
+        grad2.setColorAt(0.5, QColor(255, 255, 255, 60))
+        grad2.setColorAt(1.0, QColor(255, 255, 255, 0))
+        p.setBrush(QBrush(grad2))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QRectF(cx - spot_off - spot_r, cy - spot_off - spot_r, spot_r * 2, spot_r * 2))
+
+        # data nodes around perimeter
+        node_base_r = base_r * 2.5
+        for node in self._data_nodes:
+            ang_r = math.radians(node["angle"] + self._tick * node["speed"])
+            nx = cx + node_base_r * math.cos(ang_r)
+            ny = cy + node_base_r * math.sin(ang_r) * 0.4
+            pulse = math.sin(self._node_pulse + node["phase"]) * 0.5 + 0.5
+            sz = node["size"] * (0.5 + pulse * 0.8)
+            na = max(0, min(255, int(self._halo * (0.3 + pulse * 0.7))))
+            ncol = QColor(accent); ncol.setAlpha(na)
+            p.setBrush(QBrush(ncol))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(QRectF(nx - sz, ny - sz, sz * 2, sz * 2))
+
+            # connection line to center
+            if pulse > 0.6:
+                lcol = QColor(accent); lcol.setAlpha(na // 3)
+                p.setPen(QPen(lcol, 0.5))
+                p.drawLine(QPointF(cx, cy), QPointF(nx, ny))
+
+        # label
+        lbl_a = max(0, min(255, int(self._halo * 2.5)))
+        lbl_col = QColor(accent); lbl_col.setAlpha(lbl_a)
+        p.setPen(QPen(lbl_col, 1))
+        lbl_size = max(9, int(fw * 0.025))
+        p.setFont(QFont("Courier New", lbl_size, QFont.Weight.Bold))
+        lbl_y = cy + base_r * 1.1 + lbl_size + 12
+        lbl = "● N O X ●"
+        p.drawText(QRectF(cx - fw * 0.3, lbl_y, fw * 0.6, lbl_size + 6),
+                   Qt.AlignmentFlag.AlignCenter, lbl)
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -431,29 +616,8 @@ class HudCanvas(QWidget):
             p.drawLine(QPointF(bx, by), QPointF(bx + dx * bl, by))
             p.drawLine(QPointF(bx, by), QPointF(bx, by + dy * bl))
 
-        # face
-        if self._face_px:
-            fsz    = int(fw * 0.62 * self._scale)
-            scaled = self._face_px.scaled(
-                fsz, fsz,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            p.drawPixmap(int(cx - fsz / 2), int(cy - fsz / 2), scaled)
-        else:
-            orb_r = int(fw * 0.27 * self._scale)
-            oc    = (200, 0, 50) if self.muted else (0, 60, 110)
-            for i in range(8, 0, -1):
-                r2  = int(orb_r * i / 8)
-                frc = i / 8
-                a   = max(0, min(255, int(self._halo * 1.1 * frc)))
-                p.setBrush(QBrush(QColor(int(oc[0]*frc), int(oc[1]*frc), int(oc[2]*frc), a)))
-                p.setPen(Qt.PenStyle.NoPen)
-                p.drawEllipse(QRectF(cx - r2, cy - r2, r2 * 2, r2 * 2))
-            p.setPen(QPen(qcol(C.PRI, min(255, int(self._halo * 2))), 1))
-            p.setFont(QFont("Courier New", 13, QFont.Weight.Bold))
-            p.drawText(QRectF(cx - 80, cy - 14, 160, 28),
-                       Qt.AlignmentFlag.AlignCenter, "J.A.R.V.I.S")
+        # modern avatar — animated AI core
+        self._draw_avatar(p, cx, cy, fw)
 
         # particles
         for pt in self._particles:
@@ -500,20 +664,80 @@ class HudCanvas(QWidget):
                 cl  = qcol(C.BORDER_B)
             p.fillRect(QRectF(wx0 + i * bw, wy + 20 - hgt, bw - 1, hgt), cl)
 
+        # scanlines
+        p.setPen(QPen(QColor(0, 0, 0, 30), 0))
+        for sy_ in range(0, H, 3):
+            p.drawLine(0, sy_, W, sy_)
+
+        # vignette
+        vg = QRadialGradient(cx, cy, fw * 0.55)
+        vg.setColorAt(0.0, QColor(0, 0, 0, 0))
+        vg.setColorAt(0.7, QColor(0, 0, 0, 20))
+        vg.setColorAt(1.0, QColor(0, 0, 0, 160))
+        p.setBrush(QBrush(vg))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRect(self.rect())
+
+        # data stream at bottom
+        self._stream_phase += 0.08
+        stream_y = H - 18
+        hex_chars = "0123456789ABCDEF"
+        stream_w = 10
+        n_chars = W // stream_w
+        for si in range(n_chars):
+            offset = int(self._stream_phase + si * 0.7) % len(hex_chars)
+            ch = hex_chars[(offset + si) % len(hex_chars)]
+            alpha = max(20, min(100, int(60 + 40 * math.sin(self._stream_phase * 0.5 + si * 0.3))))
+            p.setPen(QPen(QColor(0, int(180 + 75 * math.sin(si * 0.2)), int(220 + 35 * math.sin(si * 0.3)), alpha), 1))
+            p.setFont(QFont("Courier New", 7))
+            p.drawText(QRectF(si * stream_w, stream_y, stream_w, 14),
+                       Qt.AlignmentFlag.AlignCenter, ch)
+
+def _draw_holo_brackets(p, W, H, color, cl=10, a_top=50, a_main=180, a_glow=220):
+    p.setPen(QPen(qcol(color, a_top), 0.5))
+    p.drawLine(QPointF(cl + 2, 2), QPointF(W - cl - 2, 2))
+    p.drawLine(QPointF(cl + 2, H - 2), QPointF(W - cl - 2, H - 2))
+    for off, a in [(1, a_top - 20), (0, a_main)]:
+        co = qcol(color, a)
+        p.setPen(QPen(co, 1.2 if off == 0 else 0.8))
+        p.drawLine(QPointF(2 + off, 2 + off), QPointF(2 + cl + off, 2 + off))
+        p.drawLine(QPointF(2 + off, 2 + off), QPointF(2 + off, 2 + cl + off))
+        p.drawLine(QPointF(W - 2 - off, 2 + off), QPointF(W - 2 - cl - off, 2 + off))
+        p.drawLine(QPointF(W - 2 - off, 2 + off), QPointF(W - 2 - off, 2 + cl + off))
+        p.drawLine(QPointF(2 + off, H - 2 - off), QPointF(2 + cl + off, H - 2 - off))
+        p.drawLine(QPointF(2 + off, H - 2 - off), QPointF(2 + off, H - 2 - cl - off))
+        p.drawLine(QPointF(W - 2 - off, H - 2 - off), QPointF(W - 2 - cl - off, H - 2 - off))
+        p.drawLine(QPointF(W - 2 - off, H - 2 - off), QPointF(W - 2 - off, H - 2 - cl - off))
+    for dx, dy in [(2,2),(W-2,2),(2,H-2),(W-2,H-2)]:
+        p.setBrush(QBrush(qcol(color, a_glow)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(dx, dy), 1.5, 1.5)
+
+
 class MetricBar(QWidget):
 
     def __init__(self, label: str, color: str = C.PRI, parent=None):
         super().__init__(parent)
         self._label = label
         self._color = color
-        self._value = 0.0       # 0–100
+        self._value = 0.0
         self._text  = "--"
-        self.setFixedHeight(38)
+        self._history: list[float] = []
+        self._max_h = 1.0
+        self.setFixedHeight(42)
         self.setMinimumWidth(80)
+        self._font_label = QFont("Courier New", 7, QFont.Weight.Bold)
+        self._font_value = QFont("Courier New", 9, QFont.Weight.Bold)
 
     def set_value(self, pct: float, text: str):
         self._value = max(0.0, min(100.0, pct))
         self._text  = text
+        self.update()
+
+    def set_history(self, hist: list[float]):
+        self._history = hist[-60:]
+        if hist:
+            self._max_h = max(hist) if max(hist) > 0 else 1.0
         self.update()
 
     def paintEvent(self, _):
@@ -521,19 +745,34 @@ class MetricBar(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         W, H = self.width(), self.height()
 
-        p.setBrush(QBrush(qcol(C.PANEL2)))
-        p.setPen(QPen(qcol(C.BORDER_A), 1))
-        p.drawRoundedRect(QRectF(1, 1, W - 2, H - 2), 4, 4)
+        _draw_holo_brackets(p, W, H, self._color, a_main=180)
 
-        bar_h   = 4
-        bar_y   = H - bar_h - 5
-        bar_w   = W - 12
-        bar_x   = 6
-        fill_w  = int(bar_w * self._value / 100)
+        # sparkline
+        if self._history:
+            spk_h = 12
+            spk_y = 3
+            spk_w = W - 20
+            spk_x = 10
+            step  = spk_w / max(len(self._history) - 1, 1)
+            path  = QPainterPath()
+            first = True
+            for i, v in enumerate(self._history):
+                x = spk_x + i * step
+                y = spk_y + spk_h - (v / self._max_h) * spk_h
+                if first:
+                    path.moveTo(x, y)
+                    first = False
+                else:
+                    path.lineTo(x, y)
+            spk_col = qcol(self._color, 140)
+            p.setPen(QPen(spk_col, 1.2))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(path)
 
-        p.setBrush(QBrush(qcol(C.BAR_BG)))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(QRectF(bar_x, bar_y, bar_w, bar_h), 2, 2)
+        # label
+        p.setFont(self._font_label)
+        p.setPen(QPen(qcol(self._color, 160), 1))
+        p.drawText(QRectF(8, 14, 50, 14), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._label)
 
         if self._value > 85:
             bar_col = qcol(C.RED)
@@ -542,17 +781,185 @@ class MetricBar(QWidget):
         else:
             bar_col = qcol(self._color)
 
+        # value
+        p.setFont(self._font_value)
+        p.setPen(QPen(bar_col if self._text != "--" else qcol(self._color, 80), 1))
+        p.drawText(QRectF(0, 13, W - 6, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._text)
+
+        # holographic bar
+        bar_h   = 2
+        bar_y   = H - bar_h - 4
+        bar_w   = W - 16
+        bar_x   = 8
+        fill_w  = int(bar_w * self._value / 100)
+
+        p.setBrush(QBrush(qcol(self._color, 40)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(QRectF(bar_x, bar_y, bar_w, bar_h), 1, 1)
+
         if fill_w > 0:
             p.setBrush(QBrush(bar_col))
-            p.drawRoundedRect(QRectF(bar_x, bar_y, fill_w, bar_h), 2, 2)
+            p.setPen(QPen(qcol(self._color, 100), 0.5))
+            p.drawRoundedRect(QRectF(bar_x, bar_y, fill_w, bar_h), 1, 1)
 
-        p.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-        p.setPen(QPen(qcol(C.TEXT_DIM), 1))
-        p.drawText(QRectF(8, 5, 50, 14), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._label)
+            # glow below bar
+            p.setBrush(QBrush(bar_col.lighter(150)))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(QRectF(bar_x, bar_y + 1, fill_w, 1), 0.5, 0.5)
 
-        p.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
-        p.setPen(QPen(bar_col if self._text != "--" else qcol(C.TEXT_DIM), 1))
-        p.drawText(QRectF(0, 4, W - 6, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._text)
+
+class CpuCoresWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._cores: list[float] = []
+        self.setFixedHeight(30)
+        self.setMinimumWidth(80)
+        self._font = QFont("Courier New", 7)
+
+    def set_cores(self, cores: list[float]):
+        self._cores = cores
+        self.update()
+
+    def paintEvent(self, _):
+        if not self._cores:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        W, H = self.width(), self.height()
+        n = len(self._cores)
+        gap = 3
+        bw = min(12, (W - gap * (n + 1)) // n)
+        bx = (W - (bw * n + gap * (n - 1))) // 2
+        by = 4
+        bh = H - by * 2
+
+        for i, val in enumerate(self._cores):
+            x = bx + i * (bw + gap)
+            fill_h = max(1, int(bh * min(val, 100) / 100))
+
+            # background column
+            p.setBrush(QBrush(qcol(C.PRI, 25)))
+            p.setPen(QPen(qcol(C.PRI, 60), 0.5))
+            p.drawRoundedRect(QRectF(x, by, bw, bh), 1, 1)
+
+            # fill
+            bar_col = qcol(C.RED) if val > 85 else (qcol(C.ACC) if val > 65 else qcol(C.PRI))
+            p.setBrush(QBrush(bar_col))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(QRectF(x + 0.5, by + bh - fill_h + 0.5, bw - 1, fill_h - 1), 1, 1)
+
+            # glow dot on top of filled bar
+            if fill_h > 3:
+                p.setBrush(QBrush(bar_col.lighter(180)))
+                p.drawRect(QRectF(x + 1, by + bh - fill_h, bw - 2, 1))
+
+
+class NetworkWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._up = 0.0
+        self._down = 0.0
+        self._up_history: list[float] = []
+        self._down_history: list[float] = []
+        self._tick = 0
+        self._max_h = 1.0
+        self.setFixedHeight(48)
+        self.setMinimumWidth(80)
+        self._font_val = QFont("Courier New", 8, QFont.Weight.Bold)
+        self._tmr = QTimer(self)
+        self._tmr.timeout.connect(self._anim)
+        self._tmr.start(50)
+
+    def _anim(self):
+        self._tick += 1
+        self.update()
+
+    def set_values(self, up: float, down: float,
+                   up_hist: list[float], down_hist: list[float]):
+        self._up = up
+        self._down = down
+        self._up_history = up_hist[-60:]
+        self._down_history = down_hist[-60:]
+        mx = max(max(up_hist or [0]), max(down_hist or [0]))
+        self._max_h = mx if mx > 0 else 1.0
+
+    def _fmt(self, val: float) -> str:
+        if val < 1.0:
+            return f"{val*1024:.0f}K"
+        return f"{val:.1f}M"
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        W, H = self.width(), self.height()
+        _draw_holo_brackets(p, W, H, C.PRI_DIM, a_main=150)
+
+        # up/down
+        arrow_pulse = math.sin(self._tick * 0.15) * 0.3 + 0.7
+
+        up_col = qcol(C.ACC, int(170 + 85 * arrow_pulse if self._up > 0.01 else 80))
+        p.setPen(QPen(up_col, 1))
+        p.setFont(self._font_val)
+        p.drawText(QRectF(4, 2, W // 2 - 2, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   f"▲ {self._fmt(self._up)}/s")
+
+        down_col = qcol(C.GREEN, int(170 + 85 * arrow_pulse if self._down > 0.01 else 80))
+        p.setPen(QPen(down_col, 1))
+        p.drawText(QRectF(W // 2, 2, W // 2 - 4, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                   f"▼ {self._fmt(self._down)}/s")
+
+        # sparklines area
+        bh = 16
+        by = 20
+        bw = W - 16
+        bx = 8
+
+        if self._up_history:
+            step = bw / max(len(self._up_history) - 1, 1)
+            path = QPainterPath()
+            first = True
+            for i, v in enumerate(self._up_history):
+                x = bx + i * step
+                y = by + bh - (v / self._max_h) * bh
+                if first:
+                    path.moveTo(x, y)
+                    first = False
+                else:
+                    path.lineTo(x, y)
+            p.setPen(QPen(qcol(C.ACC, 100), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(path)
+
+        if self._down_history:
+            step = bw / max(len(self._down_history) - 1, 1)
+            path = QPainterPath()
+            first = True
+            for i, v in enumerate(self._down_history):
+                x = bx + i * step
+                y = by + bh - (v / self._max_h) * bh
+                if first:
+                    path.moveTo(x, y)
+                    first = False
+                else:
+                    path.lineTo(x, y)
+            p.setPen(QPen(qcol(C.GREEN, 100), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(path)
+
+        # up/down split bar at bottom
+        total = self._up + self._down
+        bar_h = 2
+        bar_y = H - bar_h - 4
+        if total > 0:
+            up_fr = self._up / total
+            up_w = max(1, int((W - 16) * up_fr))
+            dn_w = max(0, int((W - 16) * (1 - up_fr)) - up_w)
+            p.setBrush(QBrush(qcol(C.ACC, 140)))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(QRectF(8, bar_y, up_w, bar_h), 1, 1)
+            if dn_w > 0:
+                p.setBrush(QBrush(qcol(C.GREEN, 140)))
+                p.drawRoundedRect(QRectF(8 + up_w, bar_y, dn_w, bar_h), 1, 1)
 
 class LogWidget(QTextEdit):
     _sig = pyqtSignal(str)
@@ -607,9 +1014,9 @@ class LogWidget(QTextEdit):
         self._pos    = 0
         tl = self._text.lower()
         if   tl.startswith("you:"):    self._tag = "you"
-        elif tl.startswith("jarvis:"): self._tag = "ai"
+        elif tl.startswith("nox:"):    self._tag = "ai"
         elif tl.startswith("file:"):   self._tag = "file"
-        elif "err" in tl:              self._tag = "err"
+        elif tl.startswith("[err"):    self._tag = "err"
         else:                          self._tag = "sys"
         self._tmr.start(6)
 
@@ -733,7 +1140,7 @@ class FileDropZone(QWidget):
 
     def _browse(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select a file for JARVIS", str(Path.home()),
+            self, "Select a file for NOX", str(Path.home()),
             "All Files (*.*);;"
             "Images (*.jpg *.jpeg *.png *.gif *.webp *.bmp *.svg);;"
             "Documents (*.pdf *.docx *.txt *.md *.pptx);;"
@@ -888,7 +1295,7 @@ class SetupOverlay(QWidget):
             return w
 
         layout.addWidget(_lbl("◈  INITIALISATION REQUIRED", 13, True))
-        layout.addWidget(_lbl("Configure J.A.R.V.I.S. before first boot.", 9, color=C.PRI_DIM))
+        layout.addWidget(_lbl("Configure N O X. before first boot.", 9, color=C.PRI_DIM))
         layout.addSpacing(6)
 
         sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
@@ -994,13 +1401,11 @@ class SetupOverlay(QWidget):
     def _submit(self):
         key = self._key_input.text().strip()
         or_key = self._or_input.text().strip()
-        if not key:
+        if not key and not or_key:
             self._key_input.setStyleSheet(
                 self._key_input.styleSheet() +
                 f" QLineEdit {{ border: 1px solid {C.RED}; }}"
             )
-            return
-        if not or_key:
             self._or_input.setStyleSheet(
                 self._or_input.styleSheet() +
                 f" QLineEdit {{ border: 1px solid {C.RED}; }}"
@@ -1009,13 +1414,28 @@ class SetupOverlay(QWidget):
         self.done.emit(key, or_key, self._sel_os)
 
 
+class _HoloLabel(QLabel):
+    def __init__(self, txt, col, parent=None):
+        super().__init__(txt, parent)
+        self._hcol = col
+        self.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        _draw_holo_brackets(p, self.width(), self.height(), self._hcol, cl=6, a_main=60)
+        p.setPen(QPen(qcol(self._hcol, 180), 1))
+        p.setFont(self.font())
+        p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.text())
+
+
 class MainWindow(QMainWindow):
     _log_sig   = pyqtSignal(str)
     _state_sig = pyqtSignal(str)
 
-    def __init__(self, face_path: str):
+    def __init__(self):
         super().__init__()
-        self.setWindowTitle("J.A.R.V.I.S — MARK XXXIX")
+        self.setWindowTitle("NOX — Dev FirstIA")
         self.setMinimumSize(_MIN_W, _MIN_H)
         self.resize(_DEFAULT_W, _DEFAULT_H)
 
@@ -1045,7 +1465,7 @@ class MainWindow(QMainWindow):
         self._left_panel = self._build_left_panel()
         body.addWidget(self._left_panel, stretch=0)
 
-        self.hud = HudCanvas(face_path)
+        self.hud = HudCanvas()
         self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         body.addWidget(self.hud, stretch=5)
 
@@ -1063,7 +1483,7 @@ class MainWindow(QMainWindow):
         # Metrik güncelleme timer'ı
         self._metric_tmr = QTimer(self)
         self._metric_tmr.timeout.connect(self._update_metrics)
-        self._metric_tmr.start(2000)
+        self._metric_tmr.start(1000)
         self._update_metrics()
 
         self._log_sig.connect(self._log.append_log)
@@ -1099,31 +1519,25 @@ class MainWindow(QMainWindow):
     def _update_metrics(self):
         snap = _metrics.snapshot()
 
-        # CPU
         cpu = snap["cpu"]
         self._bar_cpu.set_value(cpu, f"{cpu:.0f}%")
+        self._bar_cpu.set_history(snap["cpu_history"])
+        self._cpu_cores.set_cores(snap["cpu_cores"])
 
-        # MEM
         mem = snap["mem"]
         self._bar_mem.set_value(mem, f"{mem:.0f}%")
+        self._bar_mem.set_history(snap["mem_history"])
 
-        # NET
-        net = snap["net"]
-        if net < 1.0:
-            net_str = f"{net*1024:.0f}KB/s"
-        else:
-            net_str = f"{net:.1f}MB/s"
-        net_pct = min(100, net * 10)  # 10 MB/s = %100
-        self._bar_net.set_value(net_pct, net_str)
+        nu, nd = snap["net_up"], snap["net_down"]
+        self._bar_net.set_values(nu, nd, snap["net_up_history"], snap["net_down_history"])
 
-        # GPU
         gpu = snap["gpu"]
         if gpu >= 0:
             self._bar_gpu.set_value(gpu, f"{gpu:.0f}%")
+            self._bar_gpu.set_history(snap["gpu_history"])
         else:
             self._bar_gpu.set_value(0, "N/A")
 
-        # TMP
         tmp = snap["tmp"]
         if tmp >= 0:
             tmp_pct = min(100, (tmp / 100) * 100)
@@ -1146,6 +1560,31 @@ class MainWindow(QMainWindow):
         except Exception:
             self._proc_lbl.setText("PROC  --")
 
+        conns = snap["connections"]
+        self._conn_lbl.setText(f"CONN  {conns}")
+
+        procs = snap["top_processes"]
+        self._top_proc_lbl.setText(
+            "PROC  " + "  ".join(f"{n[:6]} {c:.1f}%" for n, c in procs[:3])
+            if procs else "PROC  --"
+        )
+
+        self._update_quota()
+
+    def _update_quota(self):
+        try:
+            db = Path("memory/procedural.db")
+            if db.exists():
+                import sqlite3
+                conn = sqlite3.connect(str(db))
+                total = conn.execute("SELECT COUNT(*) FROM tool_log").fetchone()[0]
+                fails = conn.execute("SELECT COUNT(*) FROM tool_log WHERE success=0").fetchone()[0]
+                conn.close()
+                self._q_tool_calls.setText(f"TL  {total} calls")
+                fail_pct = f" ({fails/total*100:.0f}%)" if total else ""
+                self._q_tool_fails.setText(f"FL  {fails} fails{fail_pct}")
+        except Exception:
+            pass
 
     def _build_header(self) -> QWidget:
         w = QWidget()
@@ -1160,16 +1599,16 @@ class MainWindow(QMainWindow):
             l.setStyleSheet(f"color: {color}; background: transparent;")
             return l
 
-        lay.addWidget(_badge("MARK XXXIX", C.PRI_DIM))
+        lay.addWidget(_badge("NOX", C.PRI_DIM))
         lay.addStretch()
 
         mid = QVBoxLayout(); mid.setSpacing(1)
-        title = QLabel("J.A.R.V.I.S")
+        title = QLabel("N O X")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setFont(QFont("Courier New", 17, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
         mid.addWidget(title)
-        sub = QLabel("Just A Rather Very Intelligent System")
+        sub = QLabel("Dev · FirstIA · Cyber Security")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sub.setFont(QFont("Courier New", 7))
         sub.setStyleSheet(f"color: {C.PRI_DIM}; background: transparent;")
@@ -1199,54 +1638,115 @@ class MainWindow(QMainWindow):
         w = QWidget()
         w.setFixedWidth(_LEFT_W)
         w.setStyleSheet(f"background: {C.DARK}; border-right: 1px solid {C.BORDER};")
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(8, 10, 8, 10)
-        lay.setSpacing(6)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }"
+                             "QScrollBar:vertical { width: 4px; background: transparent; }"
+                             "QScrollBar::handle:vertical { background: #0d3347; border-radius: 2px; }")
+
+        inner = QWidget()
+        inner.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(inner)
+        lay.setContentsMargins(6, 8, 6, 8)
+        lay.setSpacing(3)
 
         hdr = QLabel("◈ SYS MONITOR")
         hdr.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
         hdr.setStyleSheet(f"color: {C.PRI}; background: transparent; "
-                          f"border-bottom: 1px solid {C.BORDER}; padding-bottom: 4px;")
+                          f"border-bottom: 1px solid {C.BORDER}; padding-bottom: 3px;")
         lay.addWidget(hdr)
-        lay.addSpacing(2)
+        lay.addSpacing(1)
 
         self._bar_cpu = MetricBar("CPU", C.PRI)
+        self._cpu_cores = CpuCoresWidget()
         self._bar_mem = MetricBar("MEM", C.ACC2)
-        self._bar_net = MetricBar("NET", C.GREEN)
+        self._bar_net = NetworkWidget()
         self._bar_gpu = MetricBar("GPU", C.ACC)
         self._bar_tmp = MetricBar("TMP", "#ff6688")
 
-        for bar in [self._bar_cpu, self._bar_mem, self._bar_net,
-                    self._bar_gpu, self._bar_tmp]:
-            lay.addWidget(bar)
+        lay.addWidget(self._bar_cpu)
+        lay.addWidget(self._cpu_cores)
+        lay.addWidget(self._bar_mem)
+        lay.addWidget(self._bar_net)
+        lay.addWidget(self._bar_gpu)
+        lay.addWidget(self._bar_tmp)
 
-        lay.addSpacing(4)
+        lay.addSpacing(2)
 
         info_panel = QWidget()
-        info_panel.setStyleSheet(
-            f"background: {C.PANEL2}; border: 1px solid {C.BORDER}; border-radius: 4px;"
-        )
         ip_lay = QVBoxLayout(info_panel)
-        ip_lay.setContentsMargins(6, 5, 6, 5)
-        ip_lay.setSpacing(3)
+        ip_lay.setContentsMargins(5, 4, 5, 4)
+        ip_lay.setSpacing(1)
 
         self._uptime_lbl = QLabel("UP  --:--")
-        self._uptime_lbl.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        self._uptime_lbl.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
         self._uptime_lbl.setStyleSheet(f"color: {C.GREEN}; background: transparent; border: none;")
         ip_lay.addWidget(self._uptime_lbl)
 
         self._proc_lbl = QLabel("PROC  --")
-        self._proc_lbl.setFont(QFont("Courier New", 8))
+        self._proc_lbl.setFont(QFont("Courier New", 7))
         self._proc_lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent; border: none;")
         ip_lay.addWidget(self._proc_lbl)
 
+        self._conn_lbl = QLabel("CONN  --")
+        self._conn_lbl.setFont(QFont("Courier New", 7))
+        self._conn_lbl.setStyleSheet(f"color: {C.ACC2}; background: transparent; border: none;")
+        ip_lay.addWidget(self._conn_lbl)
+
+        self._top_proc_lbl = QLabel("")
+        self._top_proc_lbl.setFont(QFont("Courier New", 6))
+        self._top_proc_lbl.setStyleSheet(f"color: {C.ACC}; background: transparent; border: none;")
+        self._top_proc_lbl.setWordWrap(True)
+        ip_lay.addWidget(self._top_proc_lbl)
+
         os_name = {"Windows": "WIN", "Darwin": "macOS", "Linux": "LINUX"}.get(_OS, _OS.upper())
         os_lbl = QLabel(f"OS  {os_name}")
-        os_lbl.setFont(QFont("Courier New", 8))
+        os_lbl.setFont(QFont("Courier New", 7))
         os_lbl.setStyleSheet(f"color: {C.ACC2}; background: transparent; border: none;")
         ip_lay.addWidget(os_lbl)
 
         lay.addWidget(info_panel)
+
+        sep_q = QFrame()
+        sep_q.setFrameShape(QFrame.Shape.HLine)
+        sep_q.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
+        lay.addWidget(sep_q)
+
+        q_hdr = QLabel("◈ API QUOTA")
+        q_hdr.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        q_hdr.setStyleSheet(f"color: {C.ACC2}; background: transparent; "
+                            f"border-bottom: 1px solid {C.BORDER}; padding-bottom: 3px;")
+        lay.addWidget(q_hdr)
+        lay.addSpacing(1)
+
+        self._q_or_total = QLabel("OR  -- req")
+        self._q_or_total.setFont(QFont("Courier New", 7))
+        self._q_or_total.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent; border: none;")
+        lay.addWidget(self._q_or_total)
+
+        self._q_or_rate = QLabel("OR  rate --")
+        self._q_or_rate.setFont(QFont("Courier New", 6))
+        self._q_or_rate.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent; border: none;")
+        lay.addWidget(self._q_or_rate)
+
+        self._q_gemini = QLabel("GM  -- req")
+        self._q_gemini.setFont(QFont("Courier New", 7))
+        self._q_gemini.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent; border: none;")
+        lay.addWidget(self._q_gemini)
+
+        self._q_tool_calls = QLabel("TL  -- calls")
+        self._q_tool_calls.setFont(QFont("Courier New", 7))
+        self._q_tool_calls.setStyleSheet(f"color: {C.PRI}; background: transparent; border: none;")
+        lay.addWidget(self._q_tool_calls)
+
+        self._q_tool_fails = QLabel("FL  -- fails")
+        self._q_tool_fails.setFont(QFont("Courier New", 6))
+        self._q_tool_fails.setStyleSheet(f"color: {C.ACC}; background: transparent; border: none;")
+        lay.addWidget(self._q_tool_fails)
+
         lay.addStretch()
 
         for txt, col in [
@@ -1254,15 +1754,13 @@ class MainWindow(QMainWindow):
             ("SEC\nCLEARED",        C.PRI),
             ("PROTOCOL\nXXXVIII",   C.TEXT_DIM),
         ]:
-            lbl = QLabel(txt)
-            lbl.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet(
-                f"color: {col}; background: {C.PANEL2};"
-                f"border: 1px solid {C.BORDER_A}; border-radius: 3px; padding: 4px;"
-            )
+            lbl = _HoloLabel(txt, col)
             lay.addWidget(lbl)
 
+        scroll.setWidget(inner)
+        outer_lay = QVBoxLayout(w)
+        outer_lay.setContentsMargins(0, 0, 0, 0)
+        outer_lay.addWidget(scroll)
         return w
     def _build_right_panel(self) -> QWidget:
         w = QWidget()
@@ -1374,9 +1872,9 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(_fl("[F4] Mute  ·  [F11] Fullscreen"))
         lay.addStretch()
-        lay.addWidget(_fl("FatihMakes Industries  ·  MARK XXXIX  ·  CLASSIFIED"))
+        lay.addWidget(_fl("GENESIS  ·  NOX  ·  CLASSIFIED"))
         lay.addStretch()
-        lay.addWidget(_fl("© STARK INDUSTRIES", C.PRI_DIM))
+        lay.addWidget(_fl("© NOX SYSTEMS", C.PRI_DIM))
         return w
 
     def _on_file_selected(self, path: str):
@@ -1385,7 +1883,7 @@ class MainWindow(QMainWindow):
         cat  = _file_category(p)
         icon, _ = _FILE_ICONS.get(cat, _FILE_ICONS["unknown"])
         size = _fmt_size(p.stat().st_size)
-        self._file_hint.setText(f"{icon}  {p.name}  ·  {size}  ·  Tell JARVIS what to do with it")
+        self._file_hint.setText(f"{icon}  {p.name}  ·  {size}  ·  Tell NOX what to do with it")
         self._log.append_log(f"FILE: {p.name} ({size}) loaded")
         if self.on_text_command:
             msg = (
@@ -1442,9 +1940,9 @@ class MainWindow(QMainWindow):
         if not API_FILE.exists(): return False
         try:
             d = json.loads(API_FILE.read_text(encoding="utf-8"))
-            return (bool(d.get("gemini_api_key")) and
-                    bool(d.get("openrouter_api_key")) and
-                    bool(d.get("os_system")))
+            if not bool(d.get("os_system")):
+                return False
+            return bool(d.get("gemini_api_key") or d.get("openrouter_api_key") or d.get("moonshot_api_key"))
         except Exception:
             return False
 
@@ -1464,20 +1962,24 @@ class MainWindow(QMainWindow):
     # Change signature:
     def _on_setup_done(self, key: str, or_key: str, os_name: str):
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        API_FILE.write_text(
-            json.dumps({
-                "gemini_api_key":    key,
-                "openrouter_api_key": or_key,
-                "os_system":         os_name,
-            }, indent=4),
-            encoding="utf-8",
-        )
+        existing = {}
+        if API_FILE.exists():
+            try:
+                existing = json.loads(API_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        existing.update({
+            "gemini_api_key": key or existing.get("gemini_api_key", ""),
+            "openrouter_api_key": or_key or existing.get("openrouter_api_key", ""),
+            "os_system": os_name,
+        })
+        API_FILE.write_text(json.dumps(existing, indent=4), encoding="utf-8")
         self._ready = True
         if self._overlay:
             self._overlay.hide()
             self._overlay = None
         self._apply_state("LISTENING")
-        self._log.append_log(f"SYS: Initialised. OS={os_name.upper()}. JARVIS online.")
+        self._log.append_log(f"SYS: Initialised. OS={os_name.upper()}. NOX online.")
 
 class _RootShim:
     def __init__(self, app: QApplication):
@@ -1488,11 +1990,11 @@ class _RootShim:
         pass
 
 
-class JarvisUI:
-    def __init__(self, face_path: str, size=None):
+class NoxUI:
+    def __init__(self, size=None):
         self._app = QApplication.instance() or QApplication(sys.argv)
         self._app.setStyle("Fusion")
-        self._win = MainWindow(face_path)
+        self._win = MainWindow()
         self._win.show()
         self.root = _RootShim(self._app)
 

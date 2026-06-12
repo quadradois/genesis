@@ -3,12 +3,20 @@ import threading
 import json
 import sys
 import traceback
+import os
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message="All support for the.*google.generativeai.*")
+warnings.filterwarnings("ignore", message=".*non-data parts.*")
+os.environ.pop("QT_DEVICE_PIXEL_RATIO", None)
+os.environ.pop("QT_AUTO_SCREEN_SCALE_FACTOR", None)
+os.environ["QT_LOGGING_RULES"] = "qt.qpa.window=false"
 from pathlib import Path
 
 import sounddevice as sd
 from google import genai
 from google.genai import types
-from ui import JarvisUI
+from ui import NoxUI
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
     should_extract_memory, extract_memory
@@ -31,6 +39,11 @@ from actions.dev_agent         import dev_agent
 from actions.web_search        import web_search as web_search_action
 from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
+from actions.crm_connector     import crm
+from core.cognitive_runtime    import CognitiveRuntime, ToolCallRecord, ThinkingStage
+from core.reflexion            import reflexion_engine
+from memory.procedural_memory  import procedural_memory
+from core.self_improvement     import user_profile, procedural_optimizer
 
 
 def get_base_dir():
@@ -50,8 +63,17 @@ CHUNK_SIZE          = 1024
 
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)["gemini_api_key"]
+    try:
+        with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+            key = json.load(f).get("gemini_api_key", "")
+            if key:
+                return key
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    raise RuntimeError(
+        "Gemini API key not found in config/api_keys.json. "
+        "Get a free key at https://aistudio.google.com/apikey"
+    )
 
 
 def _load_system_prompt() -> str:
@@ -59,34 +81,53 @@ def _load_system_prompt() -> str:
         return PROMPT_PATH.read_text(encoding="utf-8")
     except Exception:
         return (
-            "You are JARVIS, Tony Stark's AI assistant. "
-            "Be concise, direct, and always use the provided tools to complete tasks. "
-            "Never simulate or guess results — always call the appropriate tool."
+            "You are Nox, a dark gentleman noir personal assistant. "
+            "Be concise and direct, and always use the provided tools to complete tasks. "
+            "Never simulate or guess results — always call the appropriate tool. "
+            "Respond in the same language the user speaks."
         )
     
 _last_memory_input = ""
+_llm_memory_failed = False
 
-def _update_memory_async(user_text: str, jarvis_text: str) -> None:
-    global _last_memory_input
+def _update_memory_async(user_text: str, nox_text: str) -> None:
+    global _last_memory_input, _llm_memory_failed
 
     user_text   = (user_text   or "").strip()
-    jarvis_text = (jarvis_text or "").strip()
+    nox_text = (nox_text or "").strip()
 
     if len(user_text) < 5 or user_text == _last_memory_input:
         return
     _last_memory_input = user_text
 
+    if _llm_memory_failed:
+        return
+
     try:
-        api_key = _get_api_key()
-        if not should_extract_memory(user_text, jarvis_text, api_key):
+        from core.llm_client import llm
+        if not llm.has_any_key:
+            print("[Memory] Nenhuma chave LLM configurada — memory extraction desabilitado")
+            _llm_memory_failed = True
             return
-        data = extract_memory(user_text, jarvis_text, api_key)
+    except ImportError:
+        _llm_memory_failed = True
+        return
+
+    try:
+        if not should_extract_memory(user_text, nox_text, ""):
+            return
+        data = extract_memory(user_text, nox_text, "")
         if data:
             update_memory(data)
             print(f"[Memory] ✅ {list(data.keys())}")
     except Exception as e:
-        if "429" not in str(e):
-            print(f"[Memory] ⚠️ {e}")
+        msg = str(e)
+        if "429" not in msg:
+            if "401" in msg or "key" in msg.lower() or "auth" in msg.lower():
+                print(f"[Memory] Chave LLM invalida — memory extraction desabilitado")
+                _llm_memory_failed = True
+            else:
+                print(f"[Memory] ⚠️ {e}")
 
 TOOL_DECLARATIONS = [
     {
@@ -447,11 +488,11 @@ TOOL_DECLARATIONS = [
     }
 },
     {
-    "name": "shutdown_jarvis",
+    "name": "shutdown_nox",
     "description": (
         "Shuts down the assistant completely. "
         "Call this when the user expresses intent to end the conversation, "
-        "close the assistant, say goodbye, or stop Jarvis. "
+        "close the assistant, say goodbye, or stop Nox. "
         "The user can say this in ANY language."
     ),
     "parameters": {
@@ -489,12 +530,43 @@ TOOL_DECLARATIONS = [
             "required": ["category", "key", "value"]
         }
     },
+    {
+        "name": "crm",
+        "description": (
+            "CRM integration. Use for: querying/registering properties (imoveis), "
+            "checking lead status, managing appointments (agendamentos), "
+            "managing clients. Configure URL and token in config/crm_config.json."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": (
+                        "list_properties | get_property | create_property | "
+                        "update_property | "
+                        "list_leads | get_lead | create_lead | update_lead_status | "
+                        "list_appointments | create_appointment | cancel_appointment | "
+                        "list_clients | get_client | create_client | update_client | "
+                        "custom_query | status"
+                    )
+                },
+                "property_id":   {"type": "STRING", "description": "Property/lead/client/appointment ID"},
+                "status":        {"type": "STRING", "description": "New status for lead/cliente"},
+                "data":          {"type": "STRING", "description": "JSON string with the data to create/update"},
+                "filters":       {"type": "STRING", "description": "JSON string with query filters"},
+                "endpoint":      {"type": "STRING", "description": "Custom endpoint path for custom_query"},
+                "method":        {"type": "STRING", "description": "HTTP method for custom_query (GET|POST|PUT|PATCH|DELETE)"},
+            },
+            "required": ["action"]
+        }
+    },
 ]
 
 
-class JarvisLive:
+class NoxCore:
 
-    def __init__(self, ui: JarvisUI):
+    def __init__(self, ui: NoxUI):
         self.ui             = ui
         self.session        = None
         self.audio_in_queue = None
@@ -502,6 +574,8 @@ class JarvisLive:
         self._loop          = None
         self._is_speaking   = False
         self._speaking_lock = threading.Lock()
+        self._runtime       = CognitiveRuntime(max_tool_calls=10)
+        self._session_started = False
         self.ui.on_text_command = self._on_text_command
 
     def _on_text_command(self, text: str):
@@ -537,7 +611,7 @@ class JarvisLive:
     def speak_error(self, tool_name: str, error: str):
         short = str(error)[:120]
         self.ui.write_log(f"ERR: {tool_name} — {short}")
-        self.speak(f"Sir, {tool_name} encountered an error. {short}")
+        self.speak(f"{tool_name} encountered an error. {short}")
 
     def _build_config(self) -> types.LiveConnectConfig:
         from datetime import datetime
@@ -554,9 +628,22 @@ class JarvisLive:
             f"Use this to calculate exact times for reminders.\n\n"
         )
 
+        reflexion_ctx = reflexion_engine.get_reflexion_context()
+        optimization_ctx = procedural_optimizer.generate_context_prompt()
+        procedural_mem_ctx = procedural_memory.format_memories_for_prompt()
+        profile_ctx = user_profile.get_profile_summary()
+
         parts = [time_ctx]
         if mem_str:
             parts.append(mem_str)
+        if procedural_mem_ctx:
+            parts.append(procedural_mem_ctx)
+        if reflexion_ctx:
+            parts.append(reflexion_ctx)
+        if optimization_ctx:
+            parts.append(optimization_ctx)
+        if profile_ctx:
+            parts.append(f"[USER INTERACTION PROFILE]\n{profile_ctx}\n")
         parts.append(sys_prompt)
 
         return types.LiveConnectConfig(
@@ -579,17 +666,28 @@ class JarvisLive:
         name = fc.name
         args = dict(fc.args or {})
 
-        print(f"[JARVIS] 🔧 {name}  {args}")
+        print(f"[NOX] 🔧 {name}  {args}")
         self.ui.set_state("THINKING")
+
+        record = self._runtime.start_tool_call(name, args)
+
+        warning = reflexion_engine.get_tool_warning(name)
+        if warning:
+            print(f"[NOX] ⚠️ {warning}")
+
         if name == "save_memory":
             category = args.get("category", "notes")
             key      = args.get("key", "")
             value    = args.get("value", "")
             if key and value:
                 update_memory({category: {key: {"value": value}}})
+                procedural_memory.save_memory(category, key, value)
                 print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
+            self._runtime.finish_tool_call(record, "saved", True)
+            reflexion_engine.evaluate_tool_call(record)
+            user_profile.record_tool_usage(name, True)
             return types.FunctionResponse(
                 id=fc.id, name=name,
                 response={"result": "ok", "silent": True}
@@ -683,9 +781,60 @@ class JarvisLive:
             elif name == "flight_finder":
                 r = await loop.run_in_executor(None, lambda: flight_finder(parameters=args, player=self.ui))
                 result = r or "Done."
-            elif name == "shutdown_jarvis":
+            elif name == "crm":
+                action = args.get("action", "status")
+                data = None
+                filters = None
+                if args.get("data"):
+                    try: data = json.loads(args["data"])
+                    except: data = {"raw": args["data"]}
+                if args.get("filters"):
+                    try: filters = json.loads(args["filters"])
+                    except: filters = {"q": args["filters"]}
+
+                if action == "list_properties":
+                    r = await loop.run_in_executor(None, lambda: crm.list_properties(filters))
+                elif action == "get_property":
+                    r = await loop.run_in_executor(None, lambda: crm.get_property(args.get("property_id", "")))
+                elif action == "create_property":
+                    r = await loop.run_in_executor(None, lambda: crm.create_property(data or {}))
+                elif action == "update_property":
+                    r = await loop.run_in_executor(None, lambda: crm.update_property(args.get("property_id", ""), data or {}))
+                elif action == "list_leads":
+                    r = await loop.run_in_executor(None, lambda: crm.list_leads(filters))
+                elif action == "get_lead":
+                    r = await loop.run_in_executor(None, lambda: crm.get_lead(args.get("property_id", "")))
+                elif action == "create_lead":
+                    r = await loop.run_in_executor(None, lambda: crm.create_lead(data or {}))
+                elif action == "update_lead_status":
+                    r = await loop.run_in_executor(None, lambda: crm.update_lead_status(args.get("property_id", ""), args.get("status", "")))
+                elif action == "list_appointments":
+                    r = await loop.run_in_executor(None, lambda: crm.list_appointments(filters))
+                elif action == "create_appointment":
+                    r = await loop.run_in_executor(None, lambda: crm.create_appointment(data or {}))
+                elif action == "cancel_appointment":
+                    r = await loop.run_in_executor(None, lambda: crm.cancel_appointment(args.get("property_id", "")))
+                elif action == "list_clients":
+                    r = await loop.run_in_executor(None, lambda: crm.list_clients(filters))
+                elif action == "get_client":
+                    r = await loop.run_in_executor(None, lambda: crm.get_client(args.get("property_id", "")))
+                elif action == "create_client":
+                    r = await loop.run_in_executor(None, lambda: crm.create_client(data or {}))
+                elif action == "update_client":
+                    r = await loop.run_in_executor(None, lambda: crm.update_client(args.get("property_id", ""), data or {}))
+                elif action == "custom_query":
+                    r = await loop.run_in_executor(None, lambda: crm.custom_query(
+                        args.get("endpoint", "/"),
+                        args.get("method", "GET"),
+                        data
+                    ))
+                else:
+                    r = await loop.run_in_executor(None, lambda: crm.status())
+                result = r or "CRM: operacao concluida."
+
+            elif name == "shutdown_nox":
                 self.ui.write_log("SYS: Shutdown requested.")
-                self.speak("Goodbye, sir.")
+                self.speak("Goodbye.")
 
                 def _shutdown():
                     import time, sys, os
@@ -696,15 +845,43 @@ class JarvisLive:
             else:
                 result = f"Unknown tool: {name}"
 
+            success = True
+            error_type = ""
+
         except Exception as e:
             result = f"Tool '{name}' failed: {e}"
+            error_type = "exception"
+            success = False
             traceback.print_exc()
             self.speak_error(name, e)
+
+        self._runtime.finish_tool_call(record, result, success, error_type)
+        reflexion_engine.evaluate_tool_call(record)
+        user_profile.record_tool_usage(name, success)
+        if not success:
+            procedural_memory.save_reflexion(
+                lesson=f"Tool '{name}' failed: {str(result)[:150]}",
+                pattern=name,
+                category=error_type or "unknown",
+                outcome="failure",
+            )
+        else:
+            reflexion_engine.mark_pattern_applied(name)
+
+        opt_hint = procedural_optimizer.check_tool_loop(name, success)
+        if opt_hint:
+            print(f"[NOX] {opt_hint}")
+
+        if self._runtime.current_turn and len(self._runtime.current_turn.tool_calls) == 4:
+            threading.Thread(
+                target=procedural_memory.consolidate_memories,
+                daemon=True
+            ).start()
 
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
 
-        print(f"[JARVIS] 📤 {name} → {str(result)[:80]}")
+        print(f"[NOX] 📤 {name} → {str(result)[:80]}")
 
         return types.FunctionResponse(
             id=fc.id, name=name,
@@ -717,18 +894,21 @@ class JarvisLive:
             await self.session.send_realtime_input(media=msg)
 
     async def _listen_audio(self):
-        print("[JARVIS] 🎤 Mic started")
+        print("[NOX] 🎤 Mic started")
         loop = asyncio.get_event_loop()
 
         def callback(indata, frames, time_info, status):
             with self._speaking_lock:
-                jarvis_speaking = self._is_speaking
-            if not jarvis_speaking and not self.ui.muted:
+                nox_speaking = self._is_speaking
+            if not nox_speaking and not self.ui.muted:
                 data = indata.tobytes()
-                loop.call_soon_threadsafe(
-                    self.out_queue.put_nowait,
-                    {"data": data, "mime_type": "audio/pcm"}
-                )
+                try:
+                    loop.call_soon_threadsafe(
+                        self.out_queue.put_nowait,
+                        {"data": data, "mime_type": "audio/pcm"}
+                    )
+                except asyncio.queues.QueueFull:
+                    pass
 
         try:
             with sd.InputStream(
@@ -738,15 +918,15 @@ class JarvisLive:
                 blocksize=CHUNK_SIZE,
                 callback=callback,
             ):
-                print("[JARVIS] 🎤 Mic stream open")
+                print("[NOX] 🎤 Mic stream open")
                 while True:
                     await asyncio.sleep(0.1)
         except Exception as e:
-            print(f"[JARVIS] ❌ Mic: {e}")
+            print(f"[NOX] ❌ Mic: {e}")
             raise
 
     async def _receive_audio(self):
-        print("[JARVIS] 👂 Recv started")
+        print("[NOX] 👂 Recv started")
         out_buf, in_buf = [], []
 
         try:
@@ -754,7 +934,10 @@ class JarvisLive:
                 async for response in self.session.receive():
 
                     if response.data:
-                        self.audio_in_queue.put_nowait(response.data)
+                        try:
+                            self.audio_in_queue.put_nowait(response.data)
+                        except asyncio.queues.QueueFull:
+                            pass
 
                     if response.server_content:
                         sc = response.server_content
@@ -768,6 +951,8 @@ class JarvisLive:
                         if sc.input_transcription and sc.input_transcription.text:
                             txt = sc.input_transcription.text.strip()
                             if txt:
+                                if not in_buf:
+                                    self._runtime.start_turn(txt)
                                 in_buf.append(txt)
 
                         if sc.turn_complete:
@@ -780,10 +965,15 @@ class JarvisLive:
 
                             full_out = " ".join(out_buf).strip()
                             if full_out:
-                                self.ui.write_log(f"Jarvis: {full_out}")
+                                self.ui.write_log(f"Nox: {full_out}")
                             out_buf = []
 
+                            self._runtime.end_turn()
+                            procedural_memory.increment_turn()
+
                             if full_in and len(full_in) > 5:
+                                procedural_memory.save_conversation("user", full_in)
+                                procedural_memory.save_conversation("assistant", full_out)
                                 threading.Thread(
                                     target=_update_memory_async,
                                     args=(full_in, full_out),
@@ -793,7 +983,7 @@ class JarvisLive:
                     if response.tool_call:
                         fn_responses = []
                         for fc in response.tool_call.function_calls:
-                            print(f"[JARVIS] 📞 {fc.name}")
+                            print(f"[NOX] 📞 {fc.name}")
                             fr = await self._execute_tool(fc)
                             fn_responses.append(fr)
                         await self.session.send_tool_response(
@@ -801,12 +991,23 @@ class JarvisLive:
                         )
 
         except Exception as e:
-            print(f"[JARVIS] ❌ Recv: {e}")
+            print(f"[NOX] ❌ Recv: {e}")
             traceback.print_exc()
             raise
 
+    async def _periodic_maintenance(self):
+        while True:
+            await asyncio.sleep(300)
+            try:
+                merged = await procedural_memory.async_consolidate_memories()
+                if merged:
+                    print(f"[Maintenance] Consolidated {merged} memories")
+                await procedural_memory.async_prune_old_reflexions(max_days=30)
+            except Exception as e:
+                print(f"[Maintenance] ⚠️ {e}")
+
     async def _play_audio(self):
-        print("[JARVIS] 🔊 Play started")
+        print("[NOX] 🔊 Play started")
         loop = asyncio.get_event_loop()
 
         stream = sd.RawOutputStream(
@@ -822,7 +1023,7 @@ class JarvisLive:
                 self.set_speaking(True)
                 await asyncio.to_thread(stream.write, chunk)
         except Exception as e:
-            print(f"[JARVIS] ❌ Play: {e}")
+            print(f"[NOX] ❌ Play: {e}")
             raise
         finally:
             self.set_speaking(False)
@@ -835,9 +1036,14 @@ class JarvisLive:
             http_options={"api_version": "v1beta"}
         )
 
+        if not self._session_started:
+            procedural_memory.start_session()
+            self._session_started = True
+            print(f"[Procedural] Session started (ID: {procedural_memory.session_id})")
+
         while True:
             try:
-                print("[JARVIS] 🔌 Connecting...")
+                print("[NOX] 🔌 Connecting...")
                 self.ui.set_state("THINKING")
                 config = self._build_config()
 
@@ -848,34 +1054,35 @@ class JarvisLive:
                     self.session        = session
                     self._loop          = asyncio.get_event_loop()
                     self.audio_in_queue = asyncio.Queue()
-                    self.out_queue      = asyncio.Queue(maxsize=10)
+                    self.out_queue      = asyncio.Queue(maxsize=50)
 
-                    print("[JARVIS] ✅ Connected.")
+                    print("[NOX] ✅ Connected.")
                     self.ui.set_state("LISTENING")
-                    self.ui.write_log("SYS: JARVIS online.")
+                    self.ui.write_log("SYS: NOX online.")
 
                     tg.create_task(self._send_realtime())
                     tg.create_task(self._listen_audio())
                     tg.create_task(self._receive_audio())
                     tg.create_task(self._play_audio())
+                    tg.create_task(self._periodic_maintenance())
                     
             except Exception as e:
-                print(f"[JARVIS] ⚠️ {e}")
+                print(f"[NOX] ⚠️ {e}")
                 traceback.print_exc()
 
             self.set_speaking(False)
             self.ui.set_state("THINKING")
-            print("[JARVIS] 🔄 Reconnecting in 3s...")
+            print("[NOX] 🔄 Reconnecting in 3s...")
             await asyncio.sleep(3)
 
 def main():
-    ui = JarvisUI("face.png")
+    ui = NoxUI()
 
     def runner():
         ui.wait_for_api_key()
-        jarvis = JarvisLive(ui)
+        nox = NoxCore(ui)
         try:
-            asyncio.run(jarvis.run())
+            asyncio.run(nox.run())
         except KeyboardInterrupt:
             print("\n🔴 Shutting down...")
 

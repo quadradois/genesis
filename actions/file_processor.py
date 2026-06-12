@@ -1,5 +1,5 @@
 """
-file_processor.py — JARVIS Universal File Processor
+file_processor.py — NOX Universal File Processor
 
 Supported types:
   image   → describe, ocr, resize, convert, compress, crop
@@ -22,6 +22,8 @@ import json
 import shutil
 import subprocess
 import tempfile
+import warnings
+warnings.filterwarnings("ignore", message="All support for the.*google.generativeai.*")
 from pathlib import Path
 from datetime import datetime
 

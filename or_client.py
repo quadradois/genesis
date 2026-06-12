@@ -72,12 +72,38 @@ VISION_MODELS: list[str] = [
 API_URL               = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MAX_TOKENS    = 4096
 DEFAULT_TEMPERATURE   = 0.7
-REQUEST_TIMEOUT       = 60   # seconds per request
-MAX_RETRIES_PER_MODEL = 2    # attempts before moving to next model
-RETRY_DELAY           = 2    # seconds between retries
+REQUEST_TIMEOUT       = 20   # seconds per request
+MAX_RETRIES_PER_MODEL = 1    # attempts before moving to next model
+RETRY_DELAY           = 1    # seconds between retries
 RATE_LIMIT_COOLDOWN   = 60   # seconds before retrying a rate-limited model
 
+class OpenRouterAuthError(RuntimeError):
+    pass
+
 _rate_limited: dict[str, float] = {}
+_auth_failed: bool = False
+_auth_checked: bool = False
+
+def _check_auth_once() -> bool:
+    global _auth_failed, _auth_checked
+    if _auth_checked:
+        return not _auth_failed
+    _auth_checked = True
+    try:
+        resp = requests.get(
+            "https://openrouter.ai/api/v1/auth/key",
+            headers={"Authorization": f"Bearer {_load_api_key()}"},
+            timeout=5,
+        )
+        if resp.status_code == 401:
+            logger.error("[OpenRouter] Chave de API invalida ou expirada.")
+            logger.error("Va em https://openrouter.ai/keys e gere uma nova chave.")
+            _auth_failed = True
+            return False
+        _auth_failed = False
+        return True
+    except Exception:
+        return True
 
 class OpenRouterClient:
 
@@ -86,8 +112,8 @@ class OpenRouterClient:
         self._headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type":  "application/json",
-            "HTTP-Referer":  "https://github.com/mark-xxv",
-            "X-Title":       "MARK XXV",
+            "HTTP-Referer":  "https://github.com/quadradois/genesis",
+            "X-Title":       "NOX",
         }
 
     def _is_rate_limited(self, model: str) -> bool:
@@ -132,6 +158,16 @@ class OpenRouterClient:
                     timeout=REQUEST_TIMEOUT,
                 )
 
+                if resp.status_code == 401:
+                    logger.error(
+                        f"[OpenRouter] ❌ Auth failed (401) for {model}. "
+                        "Check your API key in config/api_keys.json"
+                    )
+                    raise OpenRouterAuthError(
+                        "OpenRouter API key is invalid or expired. "
+                        "Get a free key at https://openrouter.ai/keys"
+                    )
+
                 if resp.status_code == 429:
                     self._mark_rate_limited(model)
                     return None
@@ -155,6 +191,8 @@ class OpenRouterClient:
                     f"[OpenRouter] {model} → Timeout "
                     f"(attempt {attempt}/{MAX_RETRIES_PER_MODEL})"
                 )
+            except OpenRouterAuthError:
+                raise
             except Exception as e:
                 logger.error(f"[OpenRouter] {model} → Unexpected error: {e}")
 
@@ -172,26 +210,41 @@ class OpenRouterClient:
         temperature: float = DEFAULT_TEMPERATURE,
         response_format: Optional[dict] = None,
     ) -> str:
-        if model and not self._is_rate_limited(model):
-            result = self._call(model, messages, max_tokens, temperature, response_format)
-            if result:
-                return result
-            logger.info(
-                f"[OpenRouter] Requested model failed, "
-                f"falling back to pool: {model}"
+        if not _check_auth_once():
+            raise OpenRouterAuthError(
+                "OpenRouter API key is invalid or expired. "
+                "Get a free key at https://openrouter.ai/keys"
             )
+        last_error = None
+
+        if model and not self._is_rate_limited(model):
+            try:
+                result = self._call(model, messages, max_tokens, temperature, response_format)
+                if result:
+                    return result
+            except OpenRouterAuthError:
+                raise
+            except Exception as e:
+                last_error = e
+                logger.info(f"[OpenRouter] Requested model failed, falling back: {model}")
 
         for m in pool:
             if self._is_rate_limited(m):
                 continue
             logger.info(f"[OpenRouter] Trying: {m}")
-            result = self._call(m, messages, max_tokens, temperature, response_format)
-            if result:
-                logger.info(f"[OpenRouter] ✓ Success: {m}")
-                return result
+            try:
+                result = self._call(m, messages, max_tokens, temperature, response_format)
+                if result:
+                    logger.info(f"[OpenRouter] ✓ Success: {m}")
+                    return result
+            except OpenRouterAuthError:
+                raise
+            except Exception as e:
+                last_error = e
+                continue
 
         raise RuntimeError(
-            "[OpenRouter] All models failed or are rate-limited. "
+            "[OpenRouter] All models failed. "
             "Check your API key and network connection."
         )
 
@@ -199,7 +252,7 @@ class OpenRouterClient:
         self,
         prompt: str,
         system: str = (
-            "You are a component of MARK XXV, an AI assistant inspired by JARVIS. "
+            "You are an internal worker module for an assistant. "
             "Be concise, helpful, and precise."
         ),
         model: Optional[str] = None,
@@ -328,7 +381,7 @@ client = OpenRouterClient()
 
 if __name__ == "__main__":
     print("=" * 55)
-    print("  MARK XXV — OpenRouter Client Self-Test")
+    print("  NOX — OpenRouter Client Self-Test")
     print("=" * 55)
 
     print("\n[TEST 1] Basic chat...")

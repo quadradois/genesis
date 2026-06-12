@@ -1,82 +1,46 @@
-# 🤖 MARK XXXIX-OR (39)
-### The Ultimate Cross-Platform Personal AI Assistant — By FatihMakes
+# 🌑 Genesis
 
-> 📺 **[Watch the full setup video on YouTube](https://youtu.be/ldvDNzwnM8k)**
-
-A real-time voice AI that can hear, see, understand, and control your computer — on any OS. Supporting Windows, macOS, and Linux. Local execution. Zero subscriptions. Engineered for total autonomy.
+**Genesis** é a plataforma; **Nox** é o assistente que ela executa — uma IA de voz em tempo real que ouve, vê, entende e controla o computador. Persona "dark gentleman noir"; fala no idioma do usuário. Execução local, sem assinaturas.
 
 ---
 
-## ✨ Overview
+## ✨ O que é
 
-MARK XXXIX-OR represents the pinnacle of the Jarvis series, evolving into a more flexible and robust system. It bridges the gap between the operating system and human intent. Through natural dialogue, Mark 39 analyzes your screen, processes uploaded documents, and executes complex workflows with a brand-new, adaptive interface.
+Genesis conecta o sistema operacional à intenção humana. Por diálogo natural, o assistente Nox analisa sua tela, processa arquivos e executa fluxos de trabalho complexos — com voz em tempo real e uma interface adaptável.
 
-It's not just an assistant — it's an extension of your digital life.
+## 🚀 Capacidades
 
----
-
-## 🚀 Capabilities
-
-### Core Features
-| Feature | Description |
+| Recurso | Descrição |
 |---|---|
-| 🎙️ Real-time Voice | Ultra-low latency conversation in any language |
-| 🖥️ System Control | Launch apps, manage files, execute terminal commands |
-| 🧩 Autonomous Tasks | High-level planning for complex, multi-step goals |
-| 👁️ Visual Awareness | Real-time screen processing and webcam vision |
-| 🧠 Persistent Memory | Deeply remembers your projects, preferences, and personal context |
-| ⌨️ Hybrid Input | Seamlessly switch between keyboard typing and voice commands |
-
----
-
-## 🆕 What's New in XXXIX-OR
-
-- 📂 **Advanced File Handling** — New support for direct file uploads. Drop PDFs, source code, or images into the assistant to have them analyzed, summarized, or edited instantly.
-- 🎨 **Adaptive & Flexible UI** — A complete overhaul of the interface. The new UI is fully resizable and responsive, featuring transparency controls and customizable layouts to fit your workspace perfectly.
-- 🐧🍎 **Refined Cross-Platform Stability** — Major fixes for macOS and Linux compatibility. Core system actions are now more consistent across all three major operating systems.
-- ⚡ **Optimized Core Engine** — Significant performance boost in tool-calling logic and response generation, resulting in a 40% faster interaction speed.
-- 🔀 **OpenRouter Integration** — Selected action modules (web search, memory, flight finder, desktop control, and more) now route their LLM calls through OpenRouter's free-tier models. This significantly increases the effective request limit without any additional cost, while Gemini Live continues to handle real-time voice and tool-calling.
-
----
+| 🎙️ Voz em tempo real | Conversa de baixa latência (Gemini Live, áudio nativo) |
+| 🖥️ Controle do sistema | Abre apps, gerencia arquivos, executa comandos |
+| 🧩 Tarefas autônomas | Planejamento multi-etapas (planner + executor) |
+| 👁️ Visão | Análise de tela e webcam em tempo real |
+| 🧠 Memória persistente | Lembra projetos, preferências e contexto pessoal |
+| 🏠 Módulo imobiliário/CRM | Imóveis, leads, agendamentos e clientes |
+| 🔧 Utilidades | Web, YouTube, clima, voos, jogos (Steam/Epic) e mais |
 
 ## ⚡ Quick Start
 
 ```bash
-git clone https://github.com/FatihMakes/Mark-XXXIX-OR.git
-cd Mark-XXXIX-OR
 pip install -r requirements.txt
 playwright install
 python main.py
 ```
 
-> ⚠️ **Installation Note:** To keep the repository lightweight, some OS-specific dependencies are not bundled in `requirements.txt`. If you run into a `ModuleNotFoundError`, simply install the missing package via `pip install <module_name>` for your specific system.
+Na primeira execução, copie `config/api_keys.example.json` para `config/api_keys.json` e preencha sua chave do **Gemini** (e, opcionalmente, OpenRouter/Moonshot). Para o módulo de CRM, copie `config/crm_config.example.json` para `config/crm_config.json`.
 
----
+> ⚠️ Os arquivos `config/api_keys.json` e `config/crm_config.json` contêm segredos e estão no `.gitignore` — **nunca** os comite.
 
-## 📋 Requirements
+## 📋 Requisitos
 
-| Requirement | Details |
+| Requisito | Detalhe |
 |---|---|
-| **OS** | Windows 10/11, macOS, or Linux |
-| **Python** | 3.11 or 3.12 |
-| **Microphone** | Required for voice interaction |
-| **API Keys** | Free Gemini API key + Free OpenRouter API key |
+| **SO** | Windows 10/11 (referência) |
+| **Python** | 3.11 ou 3.12 |
+| **Microfone** | Necessário para voz |
+| **Chaves** | Gemini (grátis); OpenRouter/Moonshot opcionais |
 
----
+## ⚖️ Licença & Créditos
 
-## ⚠️ License
-
-Personal and non-commercial use only.
-Licensed under **[Creative Commons BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)**.
-
----
-
-## 👤 Connect with the Creator
-
-Engineered by a developer building a real-world JARVIS-style assistant.
-⭐ **Star the repository to support the journey to Mark 100.**
-
-| Platform | Link |
-|---|---|
-| YouTube | [@FatihMakes](https://www.youtube.com/@FatihMakes) |
-| Instagram | [@fatihmakes](https://www.instagram.com/fatihmakes) |
+Construído sobre o projeto open-source **MARK XXXIX-OR**, por **FatihMakes** ([@FatihMakes](https://www.youtube.com/@FatihMakes)), licenciado sob **[Creative Commons BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)**. Este fork (Genesis) mantém a mesma licença e atribuição. Uso pessoal e não-comercial.

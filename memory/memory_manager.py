@@ -137,25 +137,29 @@ def update_memory(memory_update: dict) -> dict:
     return memory
 
 
-def should_extract_memory(user_text: str, jarvis_text: str, api_key: str = "") -> bool:
+def should_extract_memory(user_text: str, nox_text: str, api_key: str = "") -> bool:
     try:
-        from or_client import client
+        from core.llm_client import llm
 
-        combined = f"User: {user_text[:300]}\nJarvis: {jarvis_text[:1000]}"
+        if not llm.has_any_key:
+            print("[Memory] ⚠️ Nenhuma chave LLM configurada — memory extraction desabilitado")
+            return False
 
-        result = client.chat(
-            f"Does this conversation contain ANY of the following?\n"
-            f"- Personal facts (name, age, city, job, birthday, nationality)\n"
-            f"- Preferences or favorites (food, color, music, sport, game, film, book, etc.)\n"
-            f"- Active projects or goals the user is working on\n"
-            f"- People in the user's life (friends, family, partner, colleagues)\n"
-            f"- Things the user wants to do or buy in the future\n"
-            f"- Any other fact worth remembering long-term\n\n"
-            f"Reply only YES or NO.\n\nConversation:\n{combined}",
-            system="You are a memory relevance checker. Reply only YES or NO.",
-            max_tokens=5,
-            temperature=0.0,
-        )
+        combined = f"User: {user_text[:300]}\nNox: {nox_text[:1000]}"
+
+        result = llm.chat(
+                f"Does this conversation contain ANY of the following?\n"
+                f"- Personal facts (name, age, city, job, birthday, nationality)\n"
+                f"- Preferences or favorites (food, color, music, sport, game, film, book, etc.)\n"
+                f"- Active projects or goals the user is working on\n"
+                f"- People in the user's life (friends, family, partner, colleagues)\n"
+                f"- Things the user wants to do or buy in the future\n"
+                f"- Any other fact worth remembering long-term\n\n"
+                f"Reply only YES or NO.\n\nConversation:\n{combined}",
+                system="You are a memory relevance checker. Reply only YES or NO.",
+                max_tokens=20,
+                temperature=0.0,
+            )
         return "YES" in result.upper()
 
     except Exception as e:
@@ -163,13 +167,16 @@ def should_extract_memory(user_text: str, jarvis_text: str, api_key: str = "") -
         return False
 
 
-def extract_memory(user_text: str, jarvis_text: str, api_key: str = "") -> dict:
+def extract_memory(user_text: str, nox_text: str, api_key: str = "") -> dict:
     try:
-        from or_client import client
+        from core.llm_client import llm
 
-        combined = f"User: {user_text[:600]}\nJarvis: {jarvis_text[:300]}"
+        if not llm.has_any_key:
+            return {}
 
-        raw = client.chat(
+        combined = f"User: {user_text[:600]}\nNox: {nox_text[:300]}"
+
+        raw = llm.chat(
             f"Extract ALL memorable personal facts from this conversation. Any language.\n"
             f"Return ONLY valid JSON. Use {{}} if truly nothing is worth saving.\n\n"
             f"Category guide:\n"
@@ -179,20 +186,20 @@ def extract_memory(user_text: str, jarvis_text: str, api_key: str = "") -> dict:
             f"                  favorite_game, favorite_sport, favorite_book, favorite_artist,\n"
             f"                  favorite_country, hobbies, interests, dislikes, etc.\n"
             f"  projects      → projects being built, ongoing work, goals, ideas in progress\n"
-            f"                  (e.g. mark_xxv: 'Building a JARVIS-like AI assistant')\n"
+            f"                  (e.g. genesis: 'Building a personal AI assistant')\n"
             f"  relationships → people mentioned: friends, family, partner, colleagues\n"
             f"                  (e.g. best_friend_ali: 'Best friend, met in university')\n"
             f"  wishes        → future plans, things to buy, travel plans, dreams\n"
             f"  notes         → anything else worth remembering (habits, schedule, etc.)\n\n"
             f"IMPORTANT:\n"
             f"- Be LIBERAL: if something MIGHT be worth remembering, include it.\n"
-            f"- Extract from BOTH user and Jarvis turns.\n"
+            f"- Extract from BOTH user and Nox turns.\n"
             f"- Skip: weather, reminders, search results, one-time commands.\n"
             f"- Use concise English values regardless of conversation language.\n\n"
             f"Format:\n"
             f'{{"identity":{{"name":{{"value":"Ali"}}}},\n'
             f' "preferences":{{"favorite_color":{{"value":"blue"}}}},\n'
-            f' "projects":{{"mark_xxv":{{"value":"JARVIS-like AI assistant"}}}},\n'
+            f' "projects":{{"genesis":{{"value":"personal AI assistant"}}}},\n'
             f' "relationships":{{"friend_yusuf":{{"value":"close friend"}}}},\n'
             f' "wishes":{{"buy_guitar":{{"value":"wants an acoustic guitar"}}}},\n'
             f' "notes":{{"works_at_night":{{"value":"usually active late at night"}}}}}}\n\n'

@@ -39,20 +39,33 @@ def _gemini_search(query: str) -> str:
     return text
 
 
-def _ddg_search(query: str, max_results: int = 6) -> list[dict]:
+def _ddg_search(query: str, max_results: int = 8) -> list[dict]:
+    import warnings
+    warnings.filterwarnings("ignore", message=".*duckduckgo_search.*")
+
+    DDGS = None
     try:
         from ddgs import DDGS
     except ImportError:
-        from duckduckgo_search import DDGS
+        try:
+            from duckduckgo_search import DDGS
+        except ImportError:
+            return []
+
+    if DDGS is None:
+        return []
 
     results = []
-    with DDGS() as ddgs:
-        for r in ddgs.text(query, max_results=max_results):
-            results.append({
-                "title":   r.get("title",  ""),
-                "snippet": r.get("body",   ""),
-                "url":     r.get("href",   ""),
-            })
+    try:
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=max_results):
+                results.append({
+                    "title":   r.get("title",  ""),
+                    "snippet": r.get("body",   ""),
+                    "url":     r.get("href",   ""),
+                })
+    except Exception:
+        pass
     return results
 
 
@@ -107,7 +120,7 @@ def web_search(
     aspect = params.get("aspect", "general").strip() or "general"
 
     if not query and not items:
-        return "Please provide a search query, sir."
+        return "Please provide a search query."
 
     if items and mode != "compare":
         mode = "compare"
@@ -116,22 +129,25 @@ def web_search(
         player.write_log(f"[Search] {query or ', '.join(items)}")
 
     print(f"[WebSearch] 🔍 Query: {query!r}  Mode: {mode}")
-# replace: result = _gemini_search(query) block with:
     try:
-        from or_client import client
-        result = client.chat(
-            query,
-            system="You are a web search assistant. Answer factually and concisely."
-        )
-        print("[WebSearch] ✅ OpenRouter OK.")
-        return result
+        from or_client import client, OpenRouterAuthError
+        try:
+            result = client.chat(
+                query,
+                system="You are a web search assistant. Answer factually and concisely."
+            )
+            print("[WebSearch] ✅ OpenRouter OK.")
+            return result
+        except OpenRouterAuthError:
+            print("[WebSearch] ⚠️ OpenRouter auth failed — skipping to DDG...")
+            raise
     except Exception as e:
         print(f"[WebSearch] ⚠️ OpenRouter failed ({e}) — trying DDG...")
-        results = _ddg_search(query)
-        result  = _format_ddg(query, results)
-        print(f"[WebSearch] ✅ DDG: {len(results)} result(s).")
-        return result
-    
-    except Exception as e:
-        print(f"[WebSearch] ❌ All backends failed: {e}")
-        return f"Search failed, sir: {e}"
+        try:
+            results = _ddg_search(query)
+            result  = _format_ddg(query, results)
+            print(f"[WebSearch] ✅ DDG: {len(results)} result(s).")
+            return result
+        except Exception as e2:
+            print(f"[WebSearch] ❌ All backends failed: {e2}")
+            return f"Search failed: {e2}"
