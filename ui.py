@@ -1810,6 +1810,14 @@ class MainWindow(QMainWindow):
         self._style_mute_btn()
         lay.addWidget(self._mute_btn)
 
+        self._dev_btn = QPushButton("🛠  DEV TOOLS: OFF")
+        self._dev_btn.setFixedHeight(30)
+        self._dev_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        self._dev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._dev_btn.clicked.connect(self._toggle_dev)
+        self._style_dev_btn()
+        lay.addWidget(self._dev_btn)
+
         fs_btn = QPushButton("⛶  FULLSCREEN  [F11]")
         fs_btn.setFixedHeight(26)
         fs_btn.setFont(QFont("Courier New", 7))
@@ -1917,6 +1925,37 @@ class MainWindow(QMainWindow):
         else:
             self._mute_btn.setText("🎙  MICROPHONE ACTIVE")
             self._mute_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #00140a; color: {C.GREEN};
+                    border: 1px solid {C.GREEN}; border-radius: 3px;
+                }}
+                QPushButton:hover {{ background: #001f10; }}
+            """)
+
+    def _toggle_dev(self):
+        from memory.config_manager import code_execution_allowed, set_code_execution_allowed
+        new_val = not code_execution_allowed()
+        set_code_execution_allowed(new_val)
+        self._style_dev_btn()
+        if new_val:
+            self._log.append_log("SYS: Dev tools enabled — generated code may run.")
+        else:
+            self._log.append_log("SYS: Dev tools disabled — generated code blocked.")
+
+    def _style_dev_btn(self):
+        from memory.config_manager import code_execution_allowed
+        if code_execution_allowed():
+            self._dev_btn.setText("🛠  DEV TOOLS: ON")
+            self._dev_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #140a00; color: {C.ACC};
+                    border: 1px solid {C.ACC}; border-radius: 3px;
+                }}
+                QPushButton:hover {{ background: #1f1000; }}
+            """)
+        else:
+            self._dev_btn.setText("🛠  DEV TOOLS: OFF")
+            self._dev_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: #00140a; color: {C.GREEN};
                     border: 1px solid {C.GREEN}; border-radius: 3px;

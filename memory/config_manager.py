@@ -57,3 +57,25 @@ def get_gemini_key() -> str | None:
 def is_configured() -> bool:
     key = get_gemini_key()
     return bool(key and len(key) > 15)
+
+
+CODE_EXEC_DISABLED_MSG = (
+    "Execução de código gerado pelo assistente está desativada por segurança. "
+    'Para permitir, defina "allow_generated_code": true em config/api_keys.json.'
+)
+
+
+def code_execution_allowed() -> bool:
+    """Whether the assistant may execute LLM-generated code. Off by default for safety."""
+    return bool(load_api_keys().get("allow_generated_code", False))
+
+
+def set_code_execution_allowed(value: bool) -> None:
+    """Persist the code-execution toggle into api_keys.json (preserving other keys)."""
+    ensure_config_dir()
+    data = load_api_keys()
+    data["allow_generated_code"] = bool(value)
+    CONFIG_FILE.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )

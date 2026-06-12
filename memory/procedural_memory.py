@@ -241,12 +241,13 @@ class ProceduralMemory:
                 (query, limit),
             ).fetchall()
             results = [dict(r) for r in rows]
-            for r in results:
-                conn.execute(
-                    "UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?",
-                    (datetime.now().isoformat(), r["id"]),
-                )
-            conn.commit()
+            with _lock:
+                for r in results:
+                    conn.execute(
+                        "UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?",
+                        (datetime.now().isoformat(), r["id"]),
+                    )
+                conn.commit()
             return results
         except sqlite3.OperationalError:
             return []
@@ -275,12 +276,14 @@ class ProceduralMemory:
                 relevance = _compute_relevance(r, now)
                 combined = relevance * textual_score
                 scored.append((combined, r))
-                conn.execute(
-                    "UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?",
-                    (datetime.now().isoformat(), r["id"]),
-                )
             scored.sort(key=lambda x: -x[0])
-            conn.commit()
+            with _lock:
+                for r in results:
+                    conn.execute(
+                        "UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?",
+                        (datetime.now().isoformat(), r["id"]),
+                    )
+                conn.commit()
             return [r for _, r in scored[:limit]]
         except sqlite3.OperationalError:
             return []

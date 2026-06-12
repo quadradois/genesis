@@ -18,6 +18,8 @@ import re
 import time
 from pathlib import Path
 
+from memory.config_manager import code_execution_allowed, CODE_EXEC_DISABLED_MSG
+
 
 def get_base_dir():
     if getattr(sys, "frozen", False):
@@ -204,6 +206,8 @@ Fixed code:"""
 
 
 def _run_file(path: Path, args: list, timeout: int) -> str:
+    if not code_execution_allowed():
+        return CODE_EXEC_DISABLED_MSG
     interpreters = {
         ".py":  [sys.executable],
         ".js":  ["node"],

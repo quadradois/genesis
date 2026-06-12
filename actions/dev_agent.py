@@ -5,6 +5,8 @@ import re
 import time
 from pathlib import Path
 
+from memory.config_manager import code_execution_allowed, CODE_EXEC_DISABLED_MSG
+
 
 def get_base_dir():
     if getattr(sys, "frozen", False):
@@ -590,6 +592,8 @@ def dev_agent(
     session_memory=None,
     speak=None,
 ) -> str:
+    if not code_execution_allowed():
+        return CODE_EXEC_DISABLED_MSG
     p            = parameters or {}
     description  = p.get("description", "").strip()
     language     = p.get("language", "python").strip()

@@ -10,6 +10,7 @@ from typing import Callable
 
 from agent.planner       import create_plan, replan
 from agent.error_handler import analyze_error, generate_fix, ErrorDecision
+from memory.config_manager import code_execution_allowed, CODE_EXEC_DISABLED_MSG
 
 
 def get_base_dir() -> Path:
@@ -27,6 +28,8 @@ def _get_api_key() -> str:
         return json.load(f)["gemini_api_key"]
 
 def _run_generated_code(description: str, speak: Callable | None = None) -> str:
+    if not code_execution_allowed():
+        return CODE_EXEC_DISABLED_MSG
     import google.generativeai as genai
 
     if speak:
@@ -190,10 +193,6 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
     elif tool == "file_controller":
         from actions.file_controller import file_controller
         return file_controller(parameters=parameters, player=None) or "Done."
-
-    elif tool == "cmd_control":
-        from actions.cmd_control import cmd_control
-        return cmd_control(parameters=parameters, player=None) or "Done."
 
     elif tool == "code_helper":
         from actions.code_helper import code_helper

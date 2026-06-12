@@ -94,6 +94,7 @@ class CognitiveRuntime:
             started_at=time.time(),
         )
         self.current_turn = turn
+        self.budget.reset()  # fresh circuit-breaker (consecutive errors) each turn
         self.pipeline.set_stage(turn, ThinkingStage.PROCESSING)
         return turn
 

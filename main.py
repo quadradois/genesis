@@ -573,6 +573,7 @@ class NoxCore:
         self.out_queue      = None
         self._loop          = None
         self._is_speaking   = False
+        self._pending_unmute = False
         self._speaking_lock = threading.Lock()
         self._runtime       = CognitiveRuntime(max_tool_calls=10)
         self._session_started = False
@@ -668,6 +669,19 @@ class NoxCore:
 
         print(f"[NOX] 🔧 {name}  {args}")
         self.ui.set_state("THINKING")
+
+        if not self._runtime.can_proceed():
+            print("[NOX] ⛔ Iteration budget reached this turn — refusing further tool calls")
+            if not self.ui.muted:
+                self.ui.set_state("LISTENING")
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"result": (
+                    "Tool-call limit for this turn was reached "
+                    "(too many calls or repeated errors). Stop calling tools now: "
+                    "summarize what you already have, or ask the user how to proceed."
+                )},
+            )
 
         record = self._runtime.start_tool_call(name, args)
 
@@ -956,7 +970,13 @@ class NoxCore:
                                 in_buf.append(txt)
 
                         if sc.turn_complete:
-                            self.set_speaking(False)
+                            # Unmute the mic only once the audio buffer has drained,
+                            # not on the control signal alone — otherwise trailing
+                            # buffered chunks re-mute the mic and it never recovers.
+                            if self.audio_in_queue.empty():
+                                self.set_speaking(False)
+                            else:
+                                self._pending_unmute = True
 
                             full_in = " ".join(in_buf).strip()
                             if full_in:
@@ -1022,6 +1042,9 @@ class NoxCore:
                 chunk = await self.audio_in_queue.get()
                 self.set_speaking(True)
                 await asyncio.to_thread(stream.write, chunk)
+                if self._pending_unmute and self.audio_in_queue.empty():
+                    self._pending_unmute = False
+                    self.set_speaking(False)
         except Exception as e:
             print(f"[NOX] ❌ Play: {e}")
             raise
