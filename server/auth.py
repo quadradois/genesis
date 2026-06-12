@@ -12,7 +12,7 @@ _LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 def load_config() -> dict:
     try:
         return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
         return {}
 
 
@@ -31,11 +31,13 @@ def get_or_create_token() -> str:
     return tok
 
 
-def is_local(host) -> bool:
+def is_local(host: str | None) -> bool:
     return host in _LOCAL_HOSTS
 
 
-def check_access(host, token) -> bool:
+def check_access(host: str | None, token: str | None) -> bool:
     if is_local(host):
         return True
-    return bool(token) and secrets.compare_digest(str(token), get_or_create_token())
+    if not token:
+        return False
+    return secrets.compare_digest(token, get_or_create_token())

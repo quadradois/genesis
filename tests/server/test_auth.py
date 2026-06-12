@@ -42,3 +42,10 @@ def test_check_access(monkeypatch, tmp_path):
     assert auth.check_access("192.168.0.10", tok) is True        # token correto
     assert auth.check_access("192.168.0.10", "errado") is False  # token errado
     assert auth.check_access("192.168.0.10", None) is False      # sem token
+
+
+def test_load_config_tolera_encoding_invalido(monkeypatch, tmp_path):
+    cfg = tmp_path / "api_keys.json"
+    cfg.write_bytes('{"gemini_api_key": "abc"}'.encode("utf-16"))  # encoding errado
+    monkeypatch.setattr(auth, "CONFIG_PATH", cfg)
+    assert auth.load_config() == {}
