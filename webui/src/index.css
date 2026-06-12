@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+:root {
+  --nox-bg: #020611;
+  --nox-panel: #0a1626;
+  --nox-border: #14304a;
+  --nox-cyan: #22d3ee;
+  --nox-orange: #ff8c42;
+  --nox-text: #cde9f5;
+  --nox-dim: #5a93ad;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--nox-bg);
+  color: var(--nox-text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  overflow: hidden;
+}

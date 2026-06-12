@@ -23,3 +23,6 @@ Thumbs.db
 
 # === Ferramentas de brainstorming (Claude) ===
 .superpowers/
+
+# === Frontend (web UI) ===
+webui/node_modules/
