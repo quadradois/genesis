@@ -16,7 +16,6 @@ from pathlib import Path
 import sounddevice as sd
 from google import genai
 from google.genai import types
-from ui import NoxUI
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
     should_extract_memory, extract_memory
@@ -1099,7 +1098,20 @@ class NoxCore:
             await asyncio.sleep(3)
 
 def main():
-    ui = NoxUI()
+    import argparse
+    ap = argparse.ArgumentParser(description="NOX assistant")
+    ap.add_argument("--legacy-ui", action="store_true", help="usa a interface PyQt6 antiga")
+    ap.add_argument("--port", type=int, default=None, help="porta do servidor web (padrão: config web_port ou 8765)")
+    ap.add_argument("--no-window", action="store_true", help="não abre janela; só o servidor (acesse pelo navegador)")
+    args = ap.parse_args()
+
+    if args.legacy_ui:
+        from ui import NoxUI
+        ui = NoxUI()
+    else:
+        from server.web_ui import WebUI
+        ui = WebUI(port=args.port)
+        print(f"[NOX] Web UI em http://127.0.0.1:{ui.port}")
 
     def runner():
         ui.wait_for_api_key()
@@ -1110,7 +1122,18 @@ def main():
             print("\n🔴 Shutting down...")
 
     threading.Thread(target=runner, daemon=True).start()
-    ui.root.mainloop()
+
+    if args.legacy_ui:
+        ui.root.mainloop()
+    elif args.no_window:
+        import time as _t
+        try:
+            while True:
+                _t.sleep(3600)
+        except KeyboardInterrupt:
+            print("\n🔴 Shutting down...")
+    else:
+        ui.run_forever()
 
 
 if __name__ == "__main__":
