@@ -565,7 +565,7 @@ TOOL_DECLARATIONS = [
 
 class NoxCore:
 
-    def __init__(self, ui: NoxUI):
+    def __init__(self, ui: "NoxUI"):
         self.ui             = ui
         self.session        = None
         self.audio_in_queue = None
@@ -1104,6 +1104,9 @@ def main():
     ap.add_argument("--port", type=int, default=None, help="porta do servidor web (padrão: config web_port ou 8765)")
     ap.add_argument("--no-window", action="store_true", help="não abre janela; só o servidor (acesse pelo navegador)")
     args = ap.parse_args()
+
+    if args.no_window and args.legacy_ui:
+        ap.error("--no-window e --legacy-ui são mutuamente exclusivos")
 
     if args.legacy_ui:
         from ui import NoxUI
