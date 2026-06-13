@@ -1,15 +1,11 @@
 import { useEffect } from 'react'
 import { motion } from 'framer-motion'
-import Brain from './stage/brain3d'
+import Stage from './stage/Stage'
 import ChatPanel from './chat/ChatPanel'
 import Composer from './chat/Composer'
 import SetupGate from './settings/SetupGate'
-import { SplineSceneBasic } from './components/spline-demo'
 import { connect } from './lib/ws'
 import { useNox } from './lib/store'
-
-// ?stage=spline → demo Spline (comparação de direção visual); padrão = cérebro 3D
-const STAGE_MODE = new URLSearchParams(window.location.search).get('stage')
 
 function ConnBadge() {
   const conn = useNox(s => s.conn)
@@ -48,13 +44,7 @@ export default function App() {
           className="min-h-[220px] shrink-0 grow-0"
           style={{ flexBasis: '100%' }}
         >
-          {STAGE_MODE === 'spline' ? (
-            <div className="h-full w-full p-3">
-              <SplineSceneBasic />
-            </div>
-          ) : (
-            <Brain />
-          )}
+          <Stage />
         </motion.div>
         {hasChat && (
           <motion.div
