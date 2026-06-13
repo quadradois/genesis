@@ -32,6 +32,18 @@ Na primeira execução, copie `config/api_keys.example.json` para `config/api_ke
 
 > ⚠️ Os arquivos `config/api_keys.json` e `config/crm_config.json` contêm segredos e estão no `.gitignore` — **nunca** os comite.
 
+## 🌐 Nova interface (Web UI)
+
+A interface padrão agora é web (React + FastAPI), renderizada numa janela nativa leve (pywebview/WebView2):
+
+```bash
+python main.py              # janela desktop nova
+python main.py --no-window  # só o servidor; abra http://127.0.0.1:8765
+python main.py --legacy-ui  # interface PyQt6 antiga (fallback)
+```
+
+Para desenvolver o frontend: `cd webui && npm install && npm run dev` (proxy para o servidor na porta 8765). Build de produção: `npm run build`.
+
 ## 📋 Requisitos
 
 | Requisito | Detalhe |
