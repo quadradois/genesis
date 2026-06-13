@@ -47,8 +47,10 @@ def _config_valida() -> bool:
 
 
 class WebUI:
-    def __init__(self, port: int | None = None, hub: Hub | None = None, start_server: bool = True):
+    def __init__(self, port: int | None = None, hub: Hub | None = None,
+                 start_server: bool = True, host: str = "127.0.0.1"):
         self.hub = hub or Hub()
+        self.host = host
         self.port = int(port or load_config().get("web_port", 8765))
         self.on_text_command = None
         self._muted = False
@@ -193,7 +195,7 @@ class WebUI:
         from server.app import create_app  # import tardio: evita ciclo
 
         config = uvicorn.Config(
-            create_app(self), host="127.0.0.1", port=self.port, log_level="warning"
+            create_app(self), host=self.host, port=self.port, log_level="warning"
         )
         self._server = uvicorn.Server(config)
         threading.Thread(target=self._server.run, daemon=True).start()

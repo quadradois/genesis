@@ -1119,6 +1119,7 @@ def main():
     ap.add_argument("--legacy-ui", action="store_true", help="usa a interface PyQt6 antiga")
     ap.add_argument("--port", type=int, default=None, help="porta do servidor web (padrão: config web_port ou 8765)")
     ap.add_argument("--no-window", action="store_true", help="não abre janela; só o servidor (acesse pelo navegador)")
+    ap.add_argument("--lan", action="store_true", help="expõe na rede Wi-Fi para o celular (mostra URL + QR no terminal)")
     args = ap.parse_args()
 
     if args.no_window and args.legacy_ui:
@@ -1129,8 +1130,11 @@ def main():
         ui = NoxUI()
     else:
         from server.web_ui import WebUI
-        ui = WebUI(port=args.port)
+        ui = WebUI(port=args.port, host="0.0.0.0" if args.lan else "127.0.0.1")
         print(f"[NOX] Web UI em http://127.0.0.1:{ui.port}")
+        if args.lan:
+            from server.lan import print_pairing
+            print_pairing(ui.port)
 
     def runner():
         ui.wait_for_api_key()
