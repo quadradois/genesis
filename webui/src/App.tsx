@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { motion } from 'framer-motion'
-import Brain from './stage/Brain'
+import Brain from './stage/brain3d'
 import ChatPanel from './chat/ChatPanel'
 import Composer from './chat/Composer'
 import SetupGate from './settings/SetupGate'
