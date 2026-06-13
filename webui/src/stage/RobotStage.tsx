@@ -12,11 +12,20 @@ import { mapStateToMode } from '../lib/types'
 
 const SCENE_URL = 'https://prod.spline.design/kZDDjO5HuC9GJUM2/scene.splinecode'
 
-interface Puppet {
+interface Part {
   obj: SPEObject
-  baseRotY: number
-  baseRotZ: number
-  basePosY: number
+  rx: number
+  ry: number
+  rz: number
+  py: number
+}
+
+function grab(objs: SPEObject[], names: string[]): Part | null {
+  for (const n of names) {
+    const o = objs.find(x => x.name === n)
+    if (o) return { obj: o, rx: o.rotation.x, ry: o.rotation.y, rz: o.rotation.z, py: o.position.y }
+  }
+  return null
 }
 
 export default function RobotStage() {
@@ -27,29 +36,23 @@ export default function RobotStage() {
   modeRef.current = mode
   const glowRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<HTMLDivElement>(null)
-  const puppetRef = useRef<Puppet | null>(null)
+  const partsRef = useRef<{ head: Part | null; hand: Part | null; body: Part | null }>({
+    head: null, hand: null, body: null,
+  })
 
   const handleLoad = (app: Application) => {
     try {
       const objs: SPEObject[] = (app as unknown as { getAllObjects?: () => SPEObject[] }).getAllObjects?.() ?? []
-      // Diagnóstico: abra o console (F12) para ver os nomes e me dizer qual animar
       console.log('[NOX] objetos da cena Spline:', objs.map(o => o.name))
-      const prefer = ['nexbot', 'Nexbot', 'NEXBOT', 'robot', 'Robot', 'bot', 'Body', 'Group']
-      let target: SPEObject | undefined
-      for (const name of prefer) {
-        target = objs.find(o => o.name === name)
-        if (target) break
+      // Partes descobertas ao inspecionar a cena: Head, Hand, Body/fusedBody.
+      partsRef.current = {
+        head: grab(objs, ['Head', 'head', 'Cabeca']),
+        hand: grab(objs, ['Hand', 'hand', 'Arm', 'arm']),
+        body: grab(objs, ['Body', 'fusedBody', 'body', 'Bot', 'nexbot', 'Robot']),
       }
-      if (!target) target = objs[0]
-      if (target) {
-        puppetRef.current = {
-          obj: target,
-          baseRotY: target.rotation.y,
-          baseRotZ: target.rotation.z,
-          basePosY: target.position.y,
-        }
-        console.log('[NOX] marionete ativa no objeto:', target.name)
-      }
+      const found = Object.entries(partsRef.current)
+        .filter(([, v]) => v).map(([k]) => k)
+      console.log('[NOX] marionete ativa nas partes:', found.length ? found.join(', ') : 'nenhuma (usando só glow)')
     } catch (e) {
       console.warn('[NOX] cena sem marionete (runtime antigo?):', e)
     }
@@ -80,25 +83,36 @@ export default function RobotStage() {
         sceneRef.current.style.filter = `brightness(${1 + 0.22 * env}) saturate(${1 + 0.15 * env})`
       }
 
-      // marionete: anima o objeto raiz do robô sem brigar com o "olhar segue mouse"
-      const pup = puppetRef.current
-      if (pup) {
-        try {
-          if (m === 'speak') {
-            pup.obj.rotation.y = pup.baseRotY + Math.sin(t * 2.1) * 0.05
-            pup.obj.rotation.z = pup.baseRotZ + Math.sin(t * 8.7) * 0.012 * (0.4 + env)
-            pup.obj.position.y = pup.basePosY + Math.sin(t * 9) * 7 * env
-          } else if (m === 'think') {
-            pup.obj.rotation.y = pup.baseRotY + Math.sin(t * 0.9) * 0.16 // pondera, olha p/ os lados
-            pup.obj.rotation.z = pup.baseRotZ
-            pup.obj.position.y = pup.basePosY + Math.sin(t * 2.6) * 2
-          } else {
-            pup.obj.rotation.y = pup.baseRotY
-            pup.obj.rotation.z = pup.baseRotZ
-            pup.obj.position.y = pup.basePosY + Math.sin(t * 1.2) * 3 // respiração
+      // marionete por partes (sem brigar com o "olhar segue mouse" nativo)
+      const { head, hand, body } = partsRef.current
+      try {
+        if (m === 'speak') {
+          // cabeça acena no ritmo da voz; corpo respira rápido; mão gesticula leve
+          if (head) {
+            head.obj.rotation.x = head.rx + Math.sin(t * 9) * 0.06 * (0.4 + env)
+            head.obj.rotation.z = head.rz + Math.sin(t * 2.1) * 0.03
           }
-        } catch { /* objeto descartado durante hot-reload: ignora */ }
-      }
+          if (body) body.obj.position.y = body.py + Math.sin(t * 9) * 6 * env
+          if (hand) hand.obj.rotation.z = hand.rz + Math.sin(t * 5.5) * 0.12 * (0.3 + env)
+        } else if (m === 'think') {
+          // cabeça inclina pensativa e varre devagar; mão sobe ao "queixo"
+          if (head) {
+            head.obj.rotation.y = head.ry + Math.sin(t * 0.9) * 0.18
+            head.obj.rotation.z = head.rz + 0.12
+          }
+          if (body) body.obj.position.y = body.py + Math.sin(t * 2.6) * 2
+          if (hand) hand.obj.rotation.z = hand.rz + 0.25
+        } else {
+          // ocioso: tudo volta ao repouso, respiração lenta
+          if (head) {
+            head.obj.rotation.x = head.rx
+            head.obj.rotation.y = head.ry
+            head.obj.rotation.z = head.rz
+          }
+          if (body) body.obj.position.y = body.py + Math.sin(t * 1.2) * 3
+          if (hand) hand.obj.rotation.z = hand.rz
+        }
+      } catch { /* objeto descartado durante hot-reload: ignora */ }
 
       raf = requestAnimationFrame(tick)
     }
