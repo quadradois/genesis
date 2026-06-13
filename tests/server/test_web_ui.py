@@ -115,3 +115,16 @@ def test_register_upload_arquivo_inexistente_nao_explode(tmp_path):
     ui.register_upload(tmp_path / "nada.pdf")
     assert ui.current_file is None
     assert any(e.get("role") == "err" for e in hub.events)
+
+
+def test_on_audio_level_throttla_mas_zera_sempre(monkeypatch):
+    ui, hub = make_ui()
+    clock = {"v": 100.0}
+    monkeypatch.setattr("server.web_ui.time.monotonic", lambda: clock["v"])
+    ui.on_audio_level(0.5)   # passa (primeiro evento)
+    ui.on_audio_level(0.6)   # bloqueado (dentro da janela de 1/30s)
+    clock["v"] += 0.05
+    ui.on_audio_level(0.7)   # passa (janela vencida)
+    ui.on_audio_level(0.0)   # zero passa sempre
+    viz = [e for e in hub.events if e["t"] == "viz"]
+    assert [v["level"] for v in viz] == [0.5, 0.7, 0.0]

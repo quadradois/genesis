@@ -39,6 +39,7 @@ from actions.web_search        import web_search as web_search_action
 from actions.computer_control  import computer_control
 from actions.game_updater      import game_updater
 from actions.crm_connector     import crm
+from core.audio_levels         import rms_level
 from core.cognitive_runtime    import CognitiveRuntime, ToolCallRecord, ThinkingStage
 from core.reflexion            import reflexion_engine
 from memory.procedural_memory  import procedural_memory
@@ -915,6 +916,9 @@ class NoxCore:
                 nox_speaking = self._is_speaking
             if not nox_speaking and not self.ui.muted:
                 data = indata.tobytes()
+                lvl_cb = getattr(self.ui, "on_audio_level", None)
+                if lvl_cb:
+                    lvl_cb(rms_level(data) * 0.6)  # reação sutil à voz do usuário
                 try:
                     loop.call_soon_threadsafe(
                         self.out_queue.put_nowait,
@@ -1040,10 +1044,15 @@ class NoxCore:
             while True:
                 chunk = await self.audio_in_queue.get()
                 self.set_speaking(True)
+                lvl_cb = getattr(self.ui, "on_audio_level", None)
+                if lvl_cb:
+                    lvl_cb(rms_level(chunk))  # cérebro pulsa com a voz real (spec §4.3)
                 await asyncio.to_thread(stream.write, chunk)
                 if self._pending_unmute and self.audio_in_queue.empty():
                     self._pending_unmute = False
                     self.set_speaking(False)
+                    if lvl_cb:
+                        lvl_cb(0.0)
         except Exception as e:
             print(f"[NOX] ❌ Play: {e}")
             raise

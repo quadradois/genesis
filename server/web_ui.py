@@ -1,6 +1,7 @@
 """Adapter WebUI: mesma interface da NoxUI (ui.py), mas emitindo eventos WebSocket."""
 import logging
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -55,6 +56,7 @@ class WebUI:
         self._current_file: str | None = None
         self.history: deque = deque(maxlen=200)
         self._ready = threading.Event()
+        self._last_viz = 0.0
         if _config_valida():
             self._ready.set()
         self._server = None
@@ -113,7 +115,13 @@ class WebUI:
 
     def on_audio_level(self, level: float) -> None:
         # Bypassa _emit de propósito: eventos viz são de alta frequência e não devem entrar no history.
-        self.hub.broadcast({"t": "viz", "level": round(float(level), 3)})
+        # Throttle ≤30/s (spec §4.1); level 0 passa sempre para "zerar" o cérebro.
+        lvl = round(float(level), 3)
+        now = time.monotonic()
+        if lvl > 0 and (now - self._last_viz) < (1 / 30):
+            return
+        self._last_viz = now
+        self.hub.broadcast({"t": "viz", "level": lvl})
 
     def tool_event(self, name: str, status: str, ms: int | None = None) -> None:
         self._emit({"t": "tool", "name": name, "status": status, "ms": ms})
