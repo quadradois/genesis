@@ -11,6 +11,13 @@ warnings.filterwarnings("ignore", message=".*non-data parts.*")
 os.environ.pop("QT_DEVICE_PIXEL_RATIO", None)
 os.environ.pop("QT_AUTO_SCREEN_SCALE_FACTOR", None)
 os.environ["QT_LOGGING_RULES"] = "qt.qpa.window=false"
+# Com stdout redirecionado (cp1252), prints com emoji derrubavam threads.
+for _stream in (sys.stdout, sys.stderr):
+    if _stream and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 from pathlib import Path
 
 import sounddevice as sd
