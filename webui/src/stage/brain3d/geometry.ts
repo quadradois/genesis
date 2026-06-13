@@ -119,7 +119,12 @@ export function buildBrainGeometry(n = 900, seed = 1337): BrainGeometry {
 
   const count = placed + STEM_COUNT
 
-  // arestas: 3 vizinhos mais próximos entre nós do córtex + cadeia do tronco
+  // Arestas CURTAS: vizinho mais próximo garantido + até 4 vizinhos dentro do
+  // raio de corte. Arestas longas (kNN puro) atravessavam o volume e davam
+  // aparência de wireframe de poliedro; o corte por raio abraça o córtex.
+  const R_CUT = 0.21
+  const R2 = R_CUT * R_CUT
+  const MAX_PER_NODE = 4
   const edgePairs: number[] = []
   const seen = new Set<number>()
   const addEdge = (a: number, b: number) => {
@@ -131,21 +136,21 @@ export function buildBrainGeometry(n = 900, seed = 1337): BrainGeometry {
   }
   for (let i = 0; i < placed; i++) {
     const ix = pos[i * 3], iy = pos[i * 3 + 1], iz = pos[i * 3 + 2]
-    let b1 = -1, b2 = -1, b3 = -1
-    let d1 = Infinity, d2 = Infinity, d3 = Infinity
+    let nearest = -1
+    let nearestD = Infinity
+    const near: Array<[number, number]> = []
     for (let j = 0; j < placed; j++) {
       if (i === j) continue
       const dx = ix - pos[j * 3]
       const dy = iy - pos[j * 3 + 1]
       const dz = iz - pos[j * 3 + 2]
       const d = dx * dx + dy * dy + dz * dz
-      if (d < d1) { d3 = d2; b3 = b2; d2 = d1; b2 = b1; d1 = d; b1 = j }
-      else if (d < d2) { d3 = d2; b3 = b2; d2 = d; b2 = j }
-      else if (d < d3) { d3 = d; b3 = j }
+      if (d < nearestD) { nearestD = d; nearest = j }
+      if (d <= R2) near.push([d, j])
     }
-    if (b1 >= 0) addEdge(i, b1)
-    if (b2 >= 0) addEdge(i, b2)
-    if (b3 >= 0) addEdge(i, b3)
+    near.sort((a, b) => a[0] - b[0])
+    for (let k = 0; k < Math.min(MAX_PER_NODE, near.length); k++) addEdge(i, near[k][1])
+    if (near.length === 0 && nearest >= 0) addEdge(i, nearest) // nó nunca fica isolado
   }
   for (let s = 0; s < STEM_COUNT - 1; s++) addEdge(placed + s, placed + s + 1)
   addEdge(placed, 0)

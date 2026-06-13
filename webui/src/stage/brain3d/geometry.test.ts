@@ -43,6 +43,32 @@ describe('buildBrainGeometry', () => {
     }
   })
 
+  it('nenhum nó do córtex fica isolado', () => {
+    const connected = new Set<number>()
+    for (let e = 0; e < g.edges.length; e++) connected.add(g.edges[e])
+    for (let i = 0; i < g.count; i++) {
+      if (g.isStem[i]) continue
+      expect(connected.has(i)).toBe(true)
+    }
+  })
+
+  it('arestas são curtas (raio de corte) exceto resgates de isolamento', () => {
+    let longas = 0
+    for (let e = 0; e < g.edges.length; e += 2) {
+      const a = g.edges[e] * 3
+      const b = g.edges[e + 1] * 3
+      if (g.isStem[g.edges[e]] || g.isStem[g.edges[e + 1]]) continue
+      const d = Math.hypot(
+        g.positions[a] - g.positions[b],
+        g.positions[a + 1] - g.positions[b + 1],
+        g.positions[a + 2] - g.positions[b + 2],
+      )
+      if (d > 0.30) longas++
+    }
+    // resgates de nó isolado podem gerar poucas arestas longas; nunca mais que 5%
+    expect(longas).toBeLessThan(g.edges.length / 2 * 0.05)
+  })
+
   it('tronco encadeado: 6 arestas consecutivas + ponte para o córtex', () => {
     const stemStart = g.count - 7
     const pairs = new Set<string>()

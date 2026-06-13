@@ -1,7 +1,8 @@
 // Cérebro neural 3D do Nox — React Three Fiber + bloom.
 // Estados: idle (respiração) / think (morph + cascata) / speak (pulso pela voz real).
-// O nível de voz chega via store (eventos `viz`) e é lido IMPERATIVAMENTE no
-// frame loop — sem re-render React a 30Hz.
+// O visual holográfico vem de: arestas curtas no córtex, cor por vértice com
+// atenuação de profundidade (frente clara, fundo escuro), halo atmosférico e
+// bloom intenso. Nível de voz lido imperativamente no frame loop (sem re-render).
 import { useMemo, useRef } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Bloom, EffectComposer } from '@react-three/postprocessing'
@@ -21,13 +22,18 @@ const TARGET: Record<BrainMode, Params> = {
   speak: { rot: 0.22, jit: 0.024, morph: 0.15, spawn: 7,   edgeA: 0.16, coreI: 0.70, boltN: 2, boltA: 0.45 },
 }
 
-const NODE_COUNT = 900
-const MAX_PULSES = 160
+const NODE_COUNT = 1800
+const MAX_PULSES = 220
 const MAX_BOLTS = 4
 const BOLT_SEGS = 11
 const MAX_SPARKS = 24
 const WAVE_POOL = 6
-const CHIP_Y = -1.42
+const CHIP_Y = -1.5
+const BRAIN_Y = 0.42
+
+// gradiente de profundidade (frente → fundo)
+const FRONT = { r: 0.82, g: 0.96, b: 1.0 }
+const BACK = { r: 0.07, g: 0.27, b: 0.4 }
 
 const lerp = (a: number, b: number, f: number) => a + (b - a) * f
 
@@ -44,62 +50,100 @@ function radialTexture(inner: string, outer: string): THREE.CanvasTexture {
   return new THREE.CanvasTexture(cv)
 }
 
-function makeBoltPoints(from: THREE.Vector3, to: THREE.Vector3, rng: () => number): THREE.Vector3[] {
-  const pts: THREE.Vector3[] = [from.clone()]
-  for (let i = 1; i < BOLT_SEGS; i++) {
-    const t = i / BOLT_SEGS
-    const fall = 1 - Math.abs(2 * t - 1)
-    pts.push(new THREE.Vector3(
-      lerp(from.x, to.x, t) + (rng() * 2 - 1) * 0.16 * fall,
-      lerp(from.y, to.y, t) + (rng() * 2 - 1) * 0.07 * fall,
-      lerp(from.z, to.z, t) + (rng() * 2 - 1) * 0.16 * fall,
-    ))
+function dynGeo(count: number, withColor: boolean): THREE.BufferGeometry {
+  const geo = new THREE.BufferGeometry()
+  const pos = new THREE.Float32BufferAttribute(new Float32Array(count * 3).fill(9999), 3)
+  pos.setUsage(THREE.DynamicDrawUsage)
+  geo.setAttribute('position', pos)
+  if (withColor) {
+    const col = new THREE.Float32BufferAttribute(new Float32Array(count * 3), 3)
+    col.setUsage(THREE.DynamicDrawUsage)
+    geo.setAttribute('color', col)
   }
-  pts.push(to.clone())
-  return pts
+  return geo
 }
 
-function Chip() {
-  const pinGeo = useMemo(() => new THREE.BoxGeometry(0.07, 0.035, 0.2), [])
-  const pinMat = useMemo(() => new THREE.MeshBasicMaterial({ color: '#0e7490' }), [])
+function makeBoltInto(out: Float32Array, base: number, from: THREE.Vector3, to: THREE.Vector3, rng: () => number) {
+  let px = from.x, py = from.y, pz = from.z
+  for (let i = 1; i <= BOLT_SEGS; i++) {
+    const t = i / BOLT_SEGS
+    const fall = 1 - Math.abs(2 * t - 1)
+    const nx = t < 1 ? lerp(from.x, to.x, t) + (rng() * 2 - 1) * 0.14 * fall : to.x
+    const ny = t < 1 ? lerp(from.y, to.y, t) + (rng() * 2 - 1) * 0.06 * fall : to.y
+    const nz = t < 1 ? lerp(from.z, to.z, t) + (rng() * 2 - 1) * 0.14 * fall : to.z
+    const o = base + (i - 1) * 6
+    out[o] = px; out[o + 1] = py; out[o + 2] = pz
+    out[o + 3] = nx; out[o + 4] = ny; out[o + 5] = nz
+    px = nx; py = ny; pz = nz
+  }
+}
+
+function Chip({ glowTex }: { glowTex: THREE.Texture }) {
+  const pinGeo = useMemo(() => new THREE.BoxGeometry(0.045, 0.028, 0.13), [])
+  const pinMat = useMemo(() => new THREE.MeshBasicMaterial({ color: '#155e75' }), [])
   const pins = useMemo(() => {
     const list: Array<{ pos: [number, number, number]; rot: number }> = []
-    for (let i = -2; i <= 2; i++) {
-      const off = i * 0.24
-      list.push({ pos: [off, 0, 0.64], rot: 0 })
-      list.push({ pos: [off, 0, -0.64], rot: 0 })
-      list.push({ pos: [0.64, 0, off], rot: Math.PI / 2 })
-      list.push({ pos: [-0.64, 0, off], rot: Math.PI / 2 })
+    for (let i = -3; i <= 3; i++) {
+      const off = i * 0.155
+      list.push({ pos: [off, 0, 0.585], rot: 0 })
+      list.push({ pos: [off, 0, -0.585], rot: 0 })
+      list.push({ pos: [0.585, 0, off], rot: Math.PI / 2 })
+      list.push({ pos: [-0.585, 0, off], rot: Math.PI / 2 })
     }
     return list
   }, [])
+  const outline = useMemo(() => new THREE.EdgesGeometry(new THREE.BoxGeometry(1.04, 0.05, 1.04)), [])
   const traces = useMemo(() => {
     const verts: number[] = []
+    const dot: number[] = []
     const dirs = [[1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]]
     for (const [dx, dz] of dirs) {
       const L = Math.hypot(dx, dz)
-      verts.push((dx / L) * 0.8, 0, (dz / L) * 0.8, (dx / L) * 1.9, 0, (dz / L) * 1.9)
+      const ux = dx / L, uz = dz / L
+      // trilha com cotovelo: sai reto, dobra levemente
+      const mx = ux * 1.15, mz = uz * 1.15
+      const ex = ux * 1.75 + uz * 0.18, ez = uz * 1.75 - ux * 0.18
+      verts.push(ux * 0.62, 0, uz * 0.62, mx, 0, mz, mx, 0, mz, ex, 0, ez)
+      dot.push(ex, 0.001, ez)
     }
-    const geo = new THREE.BufferGeometry()
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3))
-    return geo
+    const lineGeo = new THREE.BufferGeometry()
+    lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3))
+    const dotGeo = new THREE.BufferGeometry()
+    dotGeo.setAttribute('position', new THREE.Float32BufferAttribute(dot, 3))
+    return { lineGeo, dotGeo }
   }, [])
   return (
     <group position={[0, CHIP_Y, 0]}>
-      <mesh position={[0, -0.03, 0]}>
-        <boxGeometry args={[1.16, 0.06, 1.16]} />
-        <meshBasicMaterial color="#04141f" />
+      {/* brilho ambiente sob o chip */}
+      <sprite position={[0, -0.02, 0]} scale={3.4}>
+        <spriteMaterial map={glowTex} transparent opacity={0.16} depthWrite={false}
+          blending={THREE.AdditiveBlending} color="#0891b2" />
+      </sprite>
+      <mesh position={[0, -0.035, 0]}>
+        <boxGeometry args={[1.04, 0.05, 1.04]} />
+        <meshBasicMaterial color="#03141d" />
       </mesh>
-      <mesh position={[0, 0.02, 0]}>
-        <boxGeometry args={[0.46, 0.05, 0.46]} />
-        <meshBasicMaterial color="#0a2c3f" />
+      <lineSegments geometry={outline} position={[0, -0.035, 0]}>
+        <lineBasicMaterial color="#22d3ee" transparent opacity={0.5} />
+      </lineSegments>
+      <mesh position={[0, 0.012, 0]}>
+        <boxGeometry args={[0.4, 0.04, 0.4]} />
+        <meshBasicMaterial color="#0e3a4f" />
+      </mesh>
+      <mesh position={[0, 0.034, 0]}>
+        <boxGeometry args={[0.18, 0.012, 0.18]} />
+        <meshBasicMaterial color="#7dd3fc" />
       </mesh>
       {pins.map((p, i) => (
         <mesh key={i} position={p.pos} rotation={[0, p.rot, 0]} geometry={pinGeo} material={pinMat} />
       ))}
-      <lineSegments geometry={traces} position={[0, -0.05, 0]}>
-        <lineBasicMaterial color="#0e7490" transparent opacity={0.35} />
+      <lineSegments geometry={traces.lineGeo} position={[0, -0.055, 0]}>
+        <lineBasicMaterial color="#0e7490" transparent opacity={0.4} />
       </lineSegments>
+      <points geometry={traces.dotGeo} position={[0, -0.055, 0]}>
+        <pointsMaterial map={glowTex} color="#22d3ee" size={0.07} sizeAttenuation transparent
+          opacity={0.7} depthWrite={false} blending={THREE.AdditiveBlending} />
+      </points>
     </group>
   )
 }
@@ -119,42 +163,35 @@ function BrainScene() {
     }
   }, [])
 
-  const dotTex = useMemo(() => radialTexture('rgba(190,242,255,1)', 'rgba(56,189,248,0.5)'), [])
+  const dotTex = useMemo(() => radialTexture('rgba(220,248,255,1)', 'rgba(56,189,248,0.45)'), [])
   const coreTex = useMemo(() => radialTexture('rgba(255,214,150,1)', 'rgba(255,120,30,0.55)'), [])
   const glowTex = useMemo(() => radialTexture('rgba(34,211,238,0.9)', 'rgba(8,145,178,0.25)'), [])
 
+  const geos = useMemo(() => ({
+    nodes: dynGeo(geo.count, true),
+    lines: dynGeo(geo.edges.length, true),
+    pulses: dynGeo(MAX_PULSES, true),
+    bolts: dynGeo(MAX_BOLTS * BOLT_SEGS * 2, false),
+    sparks: dynGeo(MAX_SPARKS, false),
+  }), [geo])
+
   const groupRef = useRef<THREE.Group>(null!)
-  const pointsRef = useRef<THREE.BufferGeometry>(null!)
-  const linesRef = useRef<THREE.BufferGeometry>(null!)
   const lineMatRef = useRef<THREE.LineBasicMaterial>(null!)
-  const pulsesRef = useRef<THREE.BufferGeometry>(null!)
-  const boltsRef = useRef<THREE.BufferGeometry>(null!)
   const boltMatRef = useRef<THREE.LineBasicMaterial>(null!)
-  const sparksRef = useRef<THREE.BufferGeometry>(null!)
   const coreRef = useRef<THREE.Sprite>(null!)
   const chipGlowRef = useRef<THREE.Sprite>(null!)
   const wavesRef = useRef<Array<THREE.Mesh | null>>([])
   const { camera } = useThree()
 
-  // buffers de trabalho
   const work = useMemo(() => ({
     nodePos: new Float32Array(geo.count * 3),
-    linePos: new Float32Array(geo.edges.length * 3),
-    pulsePos: new Float32Array(MAX_PULSES * 3),
-    pulseCol: new Float32Array(MAX_PULSES * 3),
-    boltPos: new Float32Array(MAX_BOLTS * BOLT_SEGS * 2 * 3),
-    sparkPos: new Float32Array(MAX_SPARKS * 3),
     pulses: [] as Array<{ e: number; t: number; sp: number; hot: boolean }>,
     sparks: [] as Array<{ t: number; sp: number; ox: number; oz: number }>,
     waves: [] as Array<{ mesh: THREE.Mesh; a: number }>,
     P: { ...TARGET.idle } as Params,
-    t: 0,
-    spawnAcc: 0,
-    sparkAcc: 0,
-    waveAcc: 0,
-    boltTimer: 0,
-    env: 0,
+    t: 0, spawnAcc: 0, sparkAcc: 0, waveAcc: 0, boltTimer: 0, env: 0,
     stemTipWorld: new THREE.Vector3(),
+    chipTarget: new THREE.Vector3(),
   }), [geo])
 
   useFrame((_, rawDt) => {
@@ -170,7 +207,6 @@ function BrainScene() {
     P.edgeA = lerp(P.edgeA, tg.edgeA, f); P.coreI = lerp(P.coreI, tg.coreI, f)
     P.boltN = lerp(P.boltN, tg.boltN, f); P.boltA = lerp(P.boltA, tg.boltA, f)
 
-    // nível de voz real (suavizado); fallback sintético se não houver eventos viz
     const rawLevel = store.getState().level
     let envTarget = 0
     if (m === 'speak') {
@@ -178,7 +214,7 @@ function BrainScene() {
         ? Math.min(1, rawLevel)
         : Math.min(1, Math.max(0, Math.sin(w.t * 7.3) + 0.55 * Math.sin(w.t * 19.1 + 1.3) + 0.35 * Math.sin(w.t * 3.7 + 0.5)) * 0.62)
     } else if (m === 'idle') {
-      envTarget = Math.min(0.45, rawLevel) // reação sutil à voz do usuário
+      envTarget = Math.min(0.45, rawLevel)
     }
     w.env = lerp(w.env, envTarget, Math.min(1, dt * 14))
     const env = w.env
@@ -190,10 +226,15 @@ function BrainScene() {
     g.rotation.y += P.rot * dt
     g.rotation.x = 0.14
     const s = breath * (1 + 0.05 * env)
-    g.scale.setScalar(s)
+    g.scale.set(s * 1.06, s, s) // leve alongamento anatômico
 
-    // posições dos nós (morph + jitter)
+    // profundidade analítica (o grupo gira em Y; frente = +z rotacionado)
+    const ang = g.rotation.y
+    const ca = Math.cos(ang)
+    const sa = Math.sin(ang)
+
     const np = w.nodePos
+    const nodeCol = geos.nodes.attributes.color.array as Float32Array
     for (let i = 0; i < geo.count; i++) {
       const i3 = i * 3
       const stem = geo.isStem[i] === 1
@@ -201,26 +242,38 @@ function BrainScene() {
       const ph = geo.phases[i]
       const sp = geo.speeds[i]
       const mw = stem ? 0 : morphWave
-      np[i3] = lerp(geo.positions[i3], geo.altPositions[i3], mw) +
+      const x = lerp(geo.positions[i3], geo.altPositions[i3], mw) +
         jm * Math.sin(w.t * sp * 2.1 + ph) * geo.jitterDirs[i3]
-      np[i3 + 1] = lerp(geo.positions[i3 + 1], geo.altPositions[i3 + 1], mw) +
+      const y = lerp(geo.positions[i3 + 1], geo.altPositions[i3 + 1], mw) +
         jm * Math.sin(w.t * sp * 1.7 + ph * 1.4) * geo.jitterDirs[i3 + 1]
-      np[i3 + 2] = lerp(geo.positions[i3 + 2], geo.altPositions[i3 + 2], mw) +
+      const z = lerp(geo.positions[i3 + 2], geo.altPositions[i3 + 2], mw) +
         jm * Math.sin(w.t * sp * 2.5 + ph * 0.7) * geo.jitterDirs[i3 + 2]
+      np[i3] = x; np[i3 + 1] = y; np[i3 + 2] = z
+      // z no espaço da câmera (após rotação Y do grupo)
+      const rz = -x * sa + z * ca
+      let depth = (rz + 1.3) / 2.6
+      depth = depth < 0 ? 0 : depth > 1 ? 1 : depth
+      const dim = stem ? 0.85 : 1
+      nodeCol[i3] = lerp(BACK.r, FRONT.r, depth) * dim
+      nodeCol[i3 + 1] = lerp(BACK.g, FRONT.g, depth) * dim
+      nodeCol[i3 + 2] = lerp(BACK.b, FRONT.b, depth) * dim
     }
-    pointsRef.current.attributes.position.array.set(np)
-    pointsRef.current.attributes.position.needsUpdate = true
+    ;(geos.nodes.attributes.position.array as Float32Array).set(np)
+    geos.nodes.attributes.position.needsUpdate = true
+    geos.nodes.attributes.color.needsUpdate = true
 
-    // arestas
-    const lp = w.linePos
+    const lp = geos.lines.attributes.position.array as Float32Array
+    const lc = geos.lines.attributes.color.array as Float32Array
     for (let e = 0; e < geo.edges.length; e++) {
-      const n3 = geo.edges[e] * 3
+      const n = geo.edges[e]
+      const n3 = n * 3
       const e3 = e * 3
       lp[e3] = np[n3]; lp[e3 + 1] = np[n3 + 1]; lp[e3 + 2] = np[n3 + 2]
+      lc[e3] = nodeCol[n3] * 0.8; lc[e3 + 1] = nodeCol[n3 + 1] * 0.8; lc[e3 + 2] = nodeCol[n3 + 2] * 0.8
     }
-    linesRef.current.attributes.position.array.set(lp)
-    linesRef.current.attributes.position.needsUpdate = true
-    lineMatRef.current.opacity = P.edgeA * (m === 'speak' ? 0.55 + 0.85 * env : 1) * 2.2
+    geos.lines.attributes.position.needsUpdate = true
+    geos.lines.attributes.color.needsUpdate = true
+    lineMatRef.current.opacity = P.edgeA * (m === 'speak' ? 0.55 + 0.85 * env : 1) * 1.4
 
     // pulsos sinápticos
     w.spawnAcc += dt * P.spawn
@@ -228,8 +281,8 @@ function BrainScene() {
       w.spawnAcc -= 1
       w.pulses.push({ e: (rng() * (geo.edges.length / 2)) | 0, t: 0, sp: 1.2 + rng() * 1.4, hot: rng() < 0.3 })
     }
-    const pp = w.pulsePos
-    const pc = w.pulseCol
+    const pp = geos.pulses.attributes.position.array as Float32Array
+    const pc = geos.pulses.attributes.color.array as Float32Array
     pp.fill(9999)
     let pi = 0
     w.pulses = w.pulses.filter(p => {
@@ -241,23 +294,20 @@ function BrainScene() {
       pp[k3] = lerp(np[a3], np[b3], p.t)
       pp[k3 + 1] = lerp(np[a3 + 1], np[b3 + 1], p.t)
       pp[k3 + 2] = lerp(np[a3 + 2], np[b3 + 2], p.t)
-      if (p.hot) { pc[k3] = 1; pc[k3 + 1] = 0.62; pc[k3 + 2] = 0.32 }
-      else { pc[k3] = 0.7; pc[k3 + 1] = 0.95; pc[k3 + 2] = 1 }
+      if (p.hot) { pc[k3] = 1; pc[k3 + 1] = 0.62; pc[k3 + 2] = 0.3 }
+      else { pc[k3] = 0.75; pc[k3 + 1] = 0.97; pc[k3 + 2] = 1 }
       pi++
       return true
     })
-    pulsesRef.current.attributes.position.array.set(pp)
-    pulsesRef.current.attributes.position.needsUpdate = true
-    pulsesRef.current.attributes.color.array.set(pc)
-    pulsesRef.current.attributes.color.needsUpdate = true
+    geos.pulses.attributes.position.needsUpdate = true
+    geos.pulses.attributes.color.needsUpdate = true
 
     // núcleo
     const flick = m === 'think' ? 0.85 + 0.15 * Math.sin(w.t * 23) + 0.08 * Math.sin(w.t * 41) : 1
-    const coreS = (0.55 + 0.35 * env) * flick
-    coreRef.current.scale.setScalar(coreS)
-    ;(coreRef.current.material as THREE.SpriteMaterial).opacity = P.coreI * (0.75 + 0.25 * env)
+    coreRef.current.scale.setScalar((0.5 + 0.32 * env) * flick)
+    ;(coreRef.current.material as THREE.SpriteMaterial).opacity = P.coreI * (0.7 + 0.3 * env)
 
-    // ponta do tronco em coordenadas de mundo (o grupo gira; o chip não)
+    // ponta do tronco no mundo
     const tip3 = geo.stemTipIndex * 3
     w.stemTipWorld.set(np[tip3], np[tip3 + 1], np[tip3 + 2])
     g.localToWorld(w.stemTipWorld)
@@ -266,26 +316,18 @@ function BrainScene() {
     w.boltTimer -= dt
     if (w.boltTimer <= 0) {
       w.boltTimer = 0.05 + rng() * 0.06
-      const bp = w.boltPos
+      const bp = geos.bolts.attributes.position.array as Float32Array
       bp.fill(9999)
       const nb = Math.min(MAX_BOLTS, Math.round(P.boltN + (m === 'speak' ? env * 1.5 : 0)))
-      const chipTarget = new THREE.Vector3(0, CHIP_Y + 0.06, 0)
       for (let b = 0; b < nb; b++) {
-        const from = w.stemTipWorld.clone()
-        from.x += (rng() * 2 - 1) * 0.05
-        from.z += (rng() * 2 - 1) * 0.05
-        const to = chipTarget.clone()
-        to.x += (rng() * 2 - 1) * 0.12
-        to.z += (rng() * 2 - 1) * 0.12
-        const pts = makeBoltPoints(from, to, rng)
-        for (let i = 0; i < BOLT_SEGS; i++) {
-          const base = (b * BOLT_SEGS + i) * 6
-          bp[base] = pts[i].x; bp[base + 1] = pts[i].y; bp[base + 2] = pts[i].z
-          bp[base + 3] = pts[i + 1].x; bp[base + 4] = pts[i + 1].y; bp[base + 5] = pts[i + 1].z
-        }
+        const from = w.stemTipWorld
+        w.chipTarget.set((rng() * 2 - 1) * 0.1, CHIP_Y + 0.05, (rng() * 2 - 1) * 0.1)
+        const fromJ = new THREE.Vector3(
+          from.x + (rng() * 2 - 1) * 0.04, from.y, from.z + (rng() * 2 - 1) * 0.04,
+        )
+        makeBoltInto(bp, b * BOLT_SEGS * 6, fromJ, w.chipTarget, rng)
       }
-      boltsRef.current.attributes.position.array.set(bp)
-      boltsRef.current.attributes.position.needsUpdate = true
+      geos.bolts.attributes.position.needsUpdate = true
     }
     boltMatRef.current.opacity = P.boltA * (m === 'speak' ? 0.4 + 0.8 * env : 1)
 
@@ -293,9 +335,9 @@ function BrainScene() {
     w.sparkAcc += dt * (m === 'think' ? 10 : m === 'speak' ? 3 + 7 * env : 2)
     while (w.sparkAcc > 1 && w.sparks.length < MAX_SPARKS) {
       w.sparkAcc -= 1
-      w.sparks.push({ t: 0, sp: 0.5 + rng() * 0.4, ox: (rng() * 2 - 1) * 0.18, oz: (rng() * 2 - 1) * 0.18 })
+      w.sparks.push({ t: 0, sp: 0.5 + rng() * 0.4, ox: (rng() * 2 - 1) * 0.16, oz: (rng() * 2 - 1) * 0.16 })
     }
-    const kp = w.sparkPos
+    const kp = geos.sparks.attributes.position.array as Float32Array
     kp.fill(9999)
     let ki = 0
     w.sparks = w.sparks.filter(sk => {
@@ -303,22 +345,21 @@ function BrainScene() {
       if (sk.t >= 1 || ki >= MAX_SPARKS) return false
       const k3 = ki * 3
       kp[k3] = lerp(sk.ox, w.stemTipWorld.x, sk.t)
-      kp[k3 + 1] = lerp(CHIP_Y + 0.08, w.stemTipWorld.y, sk.t) + 0.25 * Math.sin(Math.PI * sk.t)
+      kp[k3 + 1] = lerp(CHIP_Y + 0.07, w.stemTipWorld.y, sk.t) + 0.22 * Math.sin(Math.PI * sk.t)
       kp[k3 + 2] = lerp(sk.oz, w.stemTipWorld.z, sk.t)
       ki++
       return true
     })
-    sparksRef.current.attributes.position.array.set(kp)
-    sparksRef.current.attributes.position.needsUpdate = true
+    geos.sparks.attributes.position.needsUpdate = true
 
     // brilho de contato do chip
     const chipGlow = m === 'think'
       ? 0.6 + 0.4 * Math.abs(Math.sin(w.t * 9))
       : m === 'speak' ? 0.3 + 0.7 * env : 0.25 + 0.1 * Math.sin(w.t * 1.2)
-    ;(chipGlowRef.current.material as THREE.SpriteMaterial).opacity = 0.35 + 0.55 * chipGlow
-    chipGlowRef.current.scale.setScalar(0.5 + 0.25 * chipGlow)
+    ;(chipGlowRef.current.material as THREE.SpriteMaterial).opacity = 0.3 + 0.5 * chipGlow
+    chipGlowRef.current.scale.setScalar(0.45 + 0.22 * chipGlow)
 
-    // ondas de voz (anéis billboard)
+    // ondas de voz
     w.waveAcc += dt
     if (m === 'speak' && env > 0.55 && w.waveAcc > 0.22) {
       w.waveAcc = 0
@@ -331,8 +372,7 @@ function BrainScene() {
     }
     w.waves = w.waves.filter(wv => {
       wv.a -= dt * 0.55
-      const sc = wv.mesh.scale.x + dt * 1.6
-      wv.mesh.scale.setScalar(sc)
+      wv.mesh.scale.setScalar(wv.mesh.scale.x + dt * 1.6)
       wv.mesh.quaternion.copy(camera.quaternion)
       ;(wv.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, wv.a)
       if (wv.a <= 0) {
@@ -345,30 +385,25 @@ function BrainScene() {
 
   return (
     <>
-      <group ref={groupRef} position={[0, 0.3, 0]}>
-        <points>
-          <bufferGeometry ref={pointsRef}>
-            <bufferAttribute attach="attributes-position" args={[new Float32Array(geo.positions), 3]} />
-          </bufferGeometry>
-          <pointsMaterial map={dotTex} color="#7dd3fc" size={0.05} sizeAttenuation transparent
-            opacity={0.9} depthWrite={false} blending={THREE.AdditiveBlending} />
+      <group ref={groupRef} position={[0, BRAIN_Y, 0]}>
+        {/* halo atmosférico (mesmos pontos, maiores e fracos) */}
+        <points geometry={geos.nodes}>
+          <pointsMaterial map={dotTex} vertexColors size={0.2} sizeAttenuation transparent
+            opacity={0.1} depthWrite={false} blending={THREE.AdditiveBlending} />
         </points>
-        <lineSegments>
-          <bufferGeometry ref={linesRef}>
-            <bufferAttribute attach="attributes-position" args={[new Float32Array(geo.edges.length * 3), 3]} />
-          </bufferGeometry>
-          <lineBasicMaterial ref={lineMatRef} color="#38bdf8" transparent opacity={0.2}
-            depthWrite={false} blending={THREE.AdditiveBlending} />
-        </lineSegments>
-        <points>
-          <bufferGeometry ref={pulsesRef}>
-            <bufferAttribute attach="attributes-position" args={[new Float32Array(MAX_PULSES * 3).fill(9999), 3]} />
-            <bufferAttribute attach="attributes-color" args={[new Float32Array(MAX_PULSES * 3), 3]} />
-          </bufferGeometry>
-          <pointsMaterial map={glowTex} vertexColors size={0.11} sizeAttenuation transparent
+        <points geometry={geos.nodes}>
+          <pointsMaterial map={dotTex} vertexColors size={0.075} sizeAttenuation transparent
             opacity={0.95} depthWrite={false} blending={THREE.AdditiveBlending} />
         </points>
-        <sprite ref={coreRef} position={[0, 0, 0]} scale={0.55}>
+        <lineSegments geometry={geos.lines}>
+          <lineBasicMaterial ref={lineMatRef} vertexColors transparent opacity={0.14}
+            depthWrite={false} blending={THREE.AdditiveBlending} />
+        </lineSegments>
+        <points geometry={geos.pulses}>
+          <pointsMaterial map={glowTex} vertexColors size={0.12} sizeAttenuation transparent
+            opacity={0.95} depthWrite={false} blending={THREE.AdditiveBlending} />
+        </points>
+        <sprite ref={coreRef} position={[0, 0, 0]} scale={0.5}>
           <spriteMaterial map={coreTex} transparent opacity={0.45} depthWrite={false}
             blending={THREE.AdditiveBlending} />
         </sprite>
@@ -381,28 +416,22 @@ function BrainScene() {
         ))}
       </group>
 
-      <Chip />
-      <sprite ref={chipGlowRef} position={[0, CHIP_Y + 0.1, 0]} scale={0.55}>
+      <Chip glowTex={glowTex} />
+      <sprite ref={chipGlowRef} position={[0, CHIP_Y + 0.09, 0]} scale={0.5}>
         <spriteMaterial map={coreTex} transparent opacity={0.4} depthWrite={false}
           blending={THREE.AdditiveBlending} />
       </sprite>
-      <lineSegments>
-        <bufferGeometry ref={boltsRef}>
-          <bufferAttribute attach="attributes-position" args={[new Float32Array(MAX_BOLTS * BOLT_SEGS * 2 * 3).fill(9999), 3]} />
-        </bufferGeometry>
-        <lineBasicMaterial ref={boltMatRef} color="#d6fbff" transparent opacity={0.3}
+      <lineSegments geometry={geos.bolts}>
+        <lineBasicMaterial ref={boltMatRef} color="#eaffff" transparent opacity={0.3}
           depthWrite={false} blending={THREE.AdditiveBlending} />
       </lineSegments>
-      <points>
-        <bufferGeometry ref={sparksRef}>
-          <bufferAttribute attach="attributes-position" args={[new Float32Array(MAX_SPARKS * 3).fill(9999), 3]} />
-        </bufferGeometry>
-        <pointsMaterial map={glowTex} color="#7dd3fc" size={0.07} sizeAttenuation transparent
+      <points geometry={geos.sparks}>
+        <pointsMaterial map={glowTex} color="#7dd3fc" size={0.06} sizeAttenuation transparent
           opacity={0.8} depthWrite={false} blending={THREE.AdditiveBlending} />
       </points>
 
       <EffectComposer>
-        <Bloom intensity={0.85} luminanceThreshold={0.16} luminanceSmoothing={0.25} mipmapBlur radius={0.62} />
+        <Bloom intensity={1.55} luminanceThreshold={0.07} luminanceSmoothing={0.22} mipmapBlur radius={0.72} />
       </EffectComposer>
     </>
   )
@@ -413,7 +442,7 @@ export default function Brain3D() {
     <Canvas
       dpr={[1, 2]}
       gl={{ alpha: true, antialias: true, powerPreference: 'high-performance' }}
-      camera={{ position: [0, 0.35, 4.4], fov: 42 }}
+      camera={{ position: [0, 0.3, 4.6], fov: 42 }}
       style={{ background: 'transparent' }}
     >
       <BrainScene />
