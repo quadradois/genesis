@@ -22,6 +22,7 @@ def test_parse_log_line():
     assert parse_log_line("Nox: olá") == ("nox", "olá")
     assert parse_log_line("FILE: a.pdf (2 KB) loaded") == ("file", "a.pdf (2 KB) loaded")
     assert parse_log_line("[Err] deu ruim") == ("err", "[Err] deu ruim")
+    assert parse_log_line("ERR: file_controller — boom") == ("err", "file_controller — boom")
     assert parse_log_line("SYS: NOX online.") == ("sys", "NOX online.")
     assert parse_log_line("qualquer coisa") == ("sys", "qualquer coisa")
 

@@ -21,6 +21,8 @@ def parse_log_line(text: str) -> tuple[str, str]:
     low = text.lower()
     if low.startswith("file:"):
         return "file", text[5:].strip()
+    if text.startswith("ERR:"):
+        return "err", text[4:].strip()
     if text.startswith("[Err"):
         return "err", text
     if text.startswith("SYS:"):
