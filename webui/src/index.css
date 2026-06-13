@@ -1,5 +1,38 @@
 @import "tailwindcss";
 
+/* Tokens shadcn-style (Tailwind v4): habilitam bg-card, text-card-foreground etc. */
+@theme {
+  --color-card: #0a1626;
+  --color-card-foreground: #cde9f5;
+  --color-muted-foreground: #5a93ad;
+  --animate-spotlight: spotlight 2s ease 0.75s 1 forwards;
+
+  @keyframes spotlight {
+    0% {
+      opacity: 0;
+      transform: translate(-72%, -62%) scale(0.5);
+    }
+    100% {
+      opacity: 1;
+      transform: translate(-50%, -40%) scale(1);
+    }
+  }
+}
+
+/* spinner do fallback do SplineScene */
+.loader {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(34, 211, 238, 0.25);
+  border-top-color: #22d3ee;
+  border-radius: 50%;
+  animation: nox-spin 0.8s linear infinite;
+}
+
+@keyframes nox-spin {
+  to { transform: rotate(360deg); }
+}
+
 :root {
   --nox-bg: #020611;
   --nox-panel: #0a1626;
