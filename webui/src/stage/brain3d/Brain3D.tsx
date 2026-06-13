@@ -78,32 +78,53 @@ function makeBoltInto(out: Float32Array, base: number, from: THREE.Vector3, to: 
   }
 }
 
+// Chip holográfico: esquemático de linhas finas (guia FUI da skill ui-ux-pro-max:
+// "thin lines, technical markers, decorative brackets"), nada de volumes sólidos.
 function Chip({ glowTex }: { glowTex: THREE.Texture }) {
-  const pinGeo = useMemo(() => new THREE.BoxGeometry(0.045, 0.028, 0.13), [])
-  const pinMat = useMemo(() => new THREE.MeshBasicMaterial({ color: '#155e75' }), [])
-  const pins = useMemo(() => {
-    const list: Array<{ pos: [number, number, number]; rot: number }> = []
-    for (let i = -3; i <= 3; i++) {
-      const off = i * 0.155
-      list.push({ pos: [off, 0, 0.585], rot: 0 })
-      list.push({ pos: [off, 0, -0.585], rot: 0 })
-      list.push({ pos: [0.585, 0, off], rot: Math.PI / 2 })
-      list.push({ pos: [-0.585, 0, off], rot: Math.PI / 2 })
+  const squareGeo = (s: number) => {
+    const g2 = new THREE.BufferGeometry()
+    g2.setAttribute('position', new THREE.Float32BufferAttribute(
+      [-s, 0, -s, s, 0, -s, s, 0, s, -s, 0, s], 3,
+    ))
+    return g2
+  }
+  const rings = useMemo(() => [squareGeo(0.52), squareGeo(0.34), squareGeo(0.13)], [])
+  const brackets = useMemo(() => {
+    // cantoneiras HUD nos 4 cantos
+    const v: number[] = []
+    const L = 0.16
+    const S = 0.68
+    for (const [cx, cz] of [[-S, -S], [S, -S], [S, S], [-S, S]] as const) {
+      const sx = Math.sign(cx)
+      const sz = Math.sign(cz)
+      v.push(cx, 0, cz - sz * L, cx, 0, cz, cx, 0, cz, cx - sx * L, 0, cz)
     }
-    return list
+    const g2 = new THREE.BufferGeometry()
+    g2.setAttribute('position', new THREE.Float32BufferAttribute(v, 3))
+    return g2
   }, [])
-  const outline = useMemo(() => new THREE.EdgesGeometry(new THREE.BoxGeometry(1.04, 0.05, 1.04)), [])
+  const pads = useMemo(() => {
+    // pads delicados ao longo das bordas (pontos, não "dentes")
+    const v: number[] = []
+    for (let i = -3; i <= 3; i++) {
+      const o = i * 0.13
+      v.push(o, 0, 0.52, o, 0, -0.52, 0.52, 0, o, -0.52, 0, o)
+    }
+    const g2 = new THREE.BufferGeometry()
+    g2.setAttribute('position', new THREE.Float32BufferAttribute(v, 3))
+    return g2
+  }, [])
   const traces = useMemo(() => {
     const verts: number[] = []
     const dot: number[] = []
     const dirs = [[1, 0], [0, 1], [-1, 0], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]]
     for (const [dx, dz] of dirs) {
       const L = Math.hypot(dx, dz)
-      const ux = dx / L, uz = dz / L
-      // trilha com cotovelo: sai reto, dobra levemente
-      const mx = ux * 1.15, mz = uz * 1.15
-      const ex = ux * 1.75 + uz * 0.18, ez = uz * 1.75 - ux * 0.18
-      verts.push(ux * 0.62, 0, uz * 0.62, mx, 0, mz, mx, 0, mz, ex, 0, ez)
+      const ux = dx / L
+      const uz = dz / L
+      const mx = ux * 1.2, mz = uz * 1.2
+      const ex = ux * 1.85 + uz * 0.16, ez = uz * 1.85 - ux * 0.16
+      verts.push(ux * 0.7, 0, uz * 0.7, mx, 0, mz, mx, 0, mz, ex, 0, ez)
       dot.push(ex, 0.001, ez)
     }
     const lineGeo = new THREE.BufferGeometry()
@@ -113,36 +134,38 @@ function Chip({ glowTex }: { glowTex: THREE.Texture }) {
     return { lineGeo, dotGeo }
   }, [])
   return (
-    <group position={[0, CHIP_Y, 0]}>
-      {/* brilho ambiente sob o chip */}
-      <sprite position={[0, -0.02, 0]} scale={3.4}>
-        <spriteMaterial map={glowTex} transparent opacity={0.16} depthWrite={false}
+    <group position={[0, CHIP_Y, 0]} rotation={[0, 0.6, 0]}>
+      <sprite position={[0, -0.02, 0]} scale={2.8}>
+        <spriteMaterial map={glowTex} transparent opacity={0.09} depthWrite={false}
           blending={THREE.AdditiveBlending} color="#0891b2" />
       </sprite>
-      <mesh position={[0, -0.035, 0]}>
-        <boxGeometry args={[1.04, 0.05, 1.04]} />
-        <meshBasicMaterial color="#03141d" />
+      {/* placa: plano fino e escuro, quase invisível — só ancora as linhas */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.006, 0]}>
+        <planeGeometry args={[1.34, 1.34]} />
+        <meshBasicMaterial color="#02101a" transparent opacity={0.8} />
       </mesh>
-      <lineSegments geometry={outline} position={[0, -0.035, 0]}>
+      <lineLoop geometry={rings[0]}>
         <lineBasicMaterial color="#22d3ee" transparent opacity={0.5} />
-      </lineSegments>
-      <mesh position={[0, 0.012, 0]}>
-        <boxGeometry args={[0.4, 0.04, 0.4]} />
-        <meshBasicMaterial color="#0e3a4f" />
-      </mesh>
-      <mesh position={[0, 0.034, 0]}>
-        <boxGeometry args={[0.18, 0.012, 0.18]} />
-        <meshBasicMaterial color="#7dd3fc" />
-      </mesh>
-      {pins.map((p, i) => (
-        <mesh key={i} position={p.pos} rotation={[0, p.rot, 0]} geometry={pinGeo} material={pinMat} />
-      ))}
-      <lineSegments geometry={traces.lineGeo} position={[0, -0.055, 0]}>
+      </lineLoop>
+      <lineLoop geometry={rings[1]}>
         <lineBasicMaterial color="#0e7490" transparent opacity={0.4} />
+      </lineLoop>
+      <lineLoop geometry={rings[2]} position={[0, 0.004, 0]}>
+        <lineBasicMaterial color="#67e8f9" transparent opacity={0.75} />
+      </lineLoop>
+      <lineSegments geometry={brackets}>
+        <lineBasicMaterial color="#22d3ee" transparent opacity={0.8} />
       </lineSegments>
-      <points geometry={traces.dotGeo} position={[0, -0.055, 0]}>
-        <pointsMaterial map={glowTex} color="#22d3ee" size={0.07} sizeAttenuation transparent
-          opacity={0.7} depthWrite={false} blending={THREE.AdditiveBlending} />
+      <points geometry={pads}>
+        <pointsMaterial map={glowTex} color="#155e75" size={0.04} sizeAttenuation transparent
+          opacity={0.6} depthWrite={false} blending={THREE.AdditiveBlending} />
+      </points>
+      <lineSegments geometry={traces.lineGeo} position={[0, -0.004, 0]}>
+        <lineBasicMaterial color="#0e7490" transparent opacity={0.3} />
+      </lineSegments>
+      <points geometry={traces.dotGeo} position={[0, -0.004, 0]}>
+        <pointsMaterial map={glowTex} color="#22d3ee" size={0.05} sizeAttenuation transparent
+          opacity={0.6} depthWrite={false} blending={THREE.AdditiveBlending} />
       </points>
     </group>
   )
@@ -273,7 +296,7 @@ function BrainScene() {
     }
     geos.lines.attributes.position.needsUpdate = true
     geos.lines.attributes.color.needsUpdate = true
-    lineMatRef.current.opacity = P.edgeA * (m === 'speak' ? 0.55 + 0.85 * env : 1) * 1.4
+    lineMatRef.current.opacity = P.edgeA * (m === 'speak' ? 0.55 + 0.85 * env : 1) * 1.15
 
     // pulsos sinápticos
     w.spawnAcc += dt * P.spawn
@@ -356,8 +379,8 @@ function BrainScene() {
     const chipGlow = m === 'think'
       ? 0.6 + 0.4 * Math.abs(Math.sin(w.t * 9))
       : m === 'speak' ? 0.3 + 0.7 * env : 0.25 + 0.1 * Math.sin(w.t * 1.2)
-    ;(chipGlowRef.current.material as THREE.SpriteMaterial).opacity = 0.3 + 0.5 * chipGlow
-    chipGlowRef.current.scale.setScalar(0.45 + 0.22 * chipGlow)
+    ;(chipGlowRef.current.material as THREE.SpriteMaterial).opacity = 0.22 + 0.4 * chipGlow
+    chipGlowRef.current.scale.setScalar(0.3 + 0.16 * chipGlow)
 
     // ondas de voz
     w.waveAcc += dt
@@ -386,11 +409,6 @@ function BrainScene() {
   return (
     <>
       <group ref={groupRef} position={[0, BRAIN_Y, 0]}>
-        {/* halo atmosférico (mesmos pontos, maiores e fracos) */}
-        <points geometry={geos.nodes}>
-          <pointsMaterial map={dotTex} vertexColors size={0.2} sizeAttenuation transparent
-            opacity={0.1} depthWrite={false} blending={THREE.AdditiveBlending} />
-        </points>
         <points geometry={geos.nodes}>
           <pointsMaterial map={dotTex} vertexColors size={0.075} sizeAttenuation transparent
             opacity={0.95} depthWrite={false} blending={THREE.AdditiveBlending} />
@@ -431,7 +449,7 @@ function BrainScene() {
       </points>
 
       <EffectComposer>
-        <Bloom intensity={1.55} luminanceThreshold={0.07} luminanceSmoothing={0.22} mipmapBlur radius={0.72} />
+        <Bloom intensity={1.1} luminanceThreshold={0.12} luminanceSmoothing={0.2} mipmapBlur radius={0.48} />
       </EffectComposer>
     </>
   )
