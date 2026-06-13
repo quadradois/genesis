@@ -17,7 +17,8 @@ export default function Composer() {
   const upload = async (file: File) => {
     const fd = new FormData()
     fd.append('file', file)
-    await fetch('/api/upload', { method: 'POST', body: fd, headers: authHeaders() })
+    const r = await fetch('/api/upload', { method: 'POST', body: fd, headers: authHeaders() })
+    if (!r.ok) console.error('[NOX] upload falhou:', r.status)
   }
 
   return (

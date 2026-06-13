@@ -17,7 +17,7 @@ export default function ChatPanel() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [chat.length])
+  }, [chat])
 
   return (
     <div className="flex h-full flex-col gap-2 overflow-y-auto px-4 py-3">
