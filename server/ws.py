@@ -14,6 +14,7 @@ logger = logging.getLogger("nox.web")
 
 class WsLike(Protocol):
     async def send_json(self, payload: dict) -> None: ...
+    async def send_bytes(self, data: bytes) -> None: ...
 
 
 class Hub:
@@ -44,6 +45,15 @@ class Hub:
                 # CancelledError é BaseException: propaga corretamente.
                 await self.unregister(ws)
 
+    async def send_bytes(self, ws: WsLike, data: bytes) -> bool:
+        """Envia bytes para uma conexão específica; remove se estiver morta."""
+        try:
+            await ws.send_bytes(data)
+            return True
+        except Exception:
+            await self.unregister(ws)
+            return False
+
     def broadcast(self, payload: dict) -> None:
         """Pode ser chamado de qualquer thread; melhor esforço."""
         with self._lock:
@@ -51,6 +61,15 @@ class Hub:
         if loop is None or loop.is_closed():
             return
         future = asyncio.run_coroutine_threadsafe(self._broadcast(payload), loop)
+        future.add_done_callback(_log_broadcast_failure)
+
+    def send_bytes_threadsafe(self, ws: WsLike, data: bytes) -> None:
+        """Pode ser chamado de qualquer thread para entregar áudio binário."""
+        with self._lock:
+            loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        future = asyncio.run_coroutine_threadsafe(self.send_bytes(ws, data), loop)
         future.add_done_callback(_log_broadcast_failure)
 
 

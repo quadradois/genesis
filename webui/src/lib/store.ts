@@ -6,6 +6,7 @@ export interface NoxState {
   conn: 'connecting' | 'open' | 'closed'
   state: NoxBackendState
   muted: boolean
+  audioSource: 'pc' | 'phone'
   devTools: boolean
   setupComplete: boolean | null
   chat: ChatMsg[]
@@ -16,6 +17,7 @@ export const initialState: NoxState = {
   conn: 'connecting',
   state: 'INITIALISING',
   muted: false,
+  audioSource: 'pc',
   devTools: false,
   setupComplete: null,
   chat: [],
@@ -31,7 +33,7 @@ export function applyEvent(ev: ServerEvent): void {
   switch (ev.t) {
     case 'hello':
       store.setState({
-        state: ev.state, muted: ev.muted, devTools: ev.dev_tools,
+        state: ev.state, muted: ev.muted, audioSource: ev.audio_source ?? 'pc', devTools: ev.dev_tools,
         setupComplete: ev.setup_complete, chat: ev.history,
       })
       break
@@ -52,6 +54,14 @@ export function applyEvent(ev: ServerEvent): void {
     case 'dev_tools':
       store.setState({ devTools: ev.enabled })
       break
+    case 'audio_source':
+      store.setState({ audioSource: ev.source })
+      break
+    case 'err': {
+      const next = [...s.chat, { t: 'chat', role: 'err', text: ev.message } as const]
+      store.setState({ chat: next.length > CHAT_CAP ? next.slice(-CHAT_CAP) : next })
+      break
+    }
     case 'tool': {
       const text = `⚙ ${ev.name} ${ev.status}${ev.ms != null ? ` · ${ev.ms}ms` : ''}`
       const next = [...s.chat, { t: 'chat', role: 'sys', text } as const]

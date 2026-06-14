@@ -60,6 +60,35 @@ def test_ws_message_despacha_para_callback(env):
         assert echo["role"] == "user"
 
 
+def test_ws_phone_audio_source_recebe_bytes(env):
+    ui, client, tok = env
+    got = threading.Event()
+    received = {}
+    ui.on_phone_audio = lambda data: (received.update(data=data), got.set())
+    with client.websocket_connect(f"/ws?token={tok}") as ws:
+        ws.receive_json()  # hello
+        ws.send_json({"t": "audio_source", "source": "phone"})
+        ev = ws.receive_json()
+        assert ev == {"t": "audio_source", "source": "phone"}
+        ws.receive_json()  # log SYS
+        ws.send_bytes(b"pcm")
+        assert got.wait(timeout=2)
+        assert received["data"] == b"pcm"
+
+
+def test_ws_phone_audio_source_rejeita_segundo_cliente(env):
+    ui, client, tok = env
+    with client.websocket_connect(f"/ws?token={tok}") as ws1:
+        ws1.receive_json()
+        ws1.send_json({"t": "audio_source", "source": "phone"})
+        ws1.receive_json()
+        ws1.receive_json()
+        with client.websocket_connect(f"/ws?token={tok}") as ws2:
+            ws2.receive_json()
+            ws2.send_json({"t": "audio_source", "source": "phone"})
+            assert ws2.receive_json()["t"] == "err"
+
+
 def test_post_message_rest(env):
     ui, client, tok = env
     got = threading.Event()

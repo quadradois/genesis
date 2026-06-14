@@ -48,14 +48,20 @@ def _config_valida() -> bool:
 
 class WebUI:
     def __init__(self, port: int | None = None, hub: Hub | None = None,
-                 start_server: bool = True, host: str = "127.0.0.1"):
+                 start_server: bool = True, host: str = "127.0.0.1",
+                 ssl_certfile: str | None = None, ssl_keyfile: str | None = None):
         self.hub = hub or Hub()
         self.host = host
         self.port = int(port or load_config().get("web_port", 8765))
+        self.ssl_certfile = ssl_certfile
+        self.ssl_keyfile = ssl_keyfile
         self.on_text_command = None
         self._muted = False
         self._state = "INITIALISING"
         self._current_file: str | None = None
+        self._audio_source = "pc"
+        self._phone_ws = None
+        self.on_phone_audio = None
         self.history: deque = deque(maxlen=200)
         self._ready = threading.Event()
         self._last_viz = 0.0
@@ -100,6 +106,10 @@ class WebUI:
             self.write_log("SYS: Microphone active.")
 
     @property
+    def audio_source(self) -> str:
+        return self._audio_source
+
+    @property
     def current_file(self) -> str | None:
         return self._current_file
 
@@ -124,6 +134,48 @@ class WebUI:
             return
         self._last_viz = now
         self.hub.broadcast({"t": "viz", "level": lvl})
+
+    def set_audio_source(self, source: str, ws=None) -> bool:
+        source = "phone" if source == "phone" else "pc"
+        if source == "phone":
+            if self._phone_ws is not None and self._phone_ws is not ws:
+                return False
+            self._phone_ws = ws
+        else:
+            if self._phone_ws is not None and ws is not None and self._phone_ws is not ws:
+                return False
+            if ws is None or self._phone_ws is ws:
+                self._phone_ws = None
+        if source != self._audio_source:
+            self._audio_source = source
+            self._emit({"t": "audio_source", "source": source})
+            self.write_log(
+                "SYS: Phone audio active."
+                if source == "phone" else
+                "SYS: PC audio active."
+            )
+        return True
+
+    def release_audio_source(self, ws) -> None:
+        if self._phone_ws is ws:
+            self._phone_ws = None
+            if self._audio_source == "phone":
+                self._audio_source = "pc"
+                self._emit({"t": "audio_source", "source": "pc"})
+                self.write_log("SYS: Phone audio disconnected. PC audio active.")
+
+    def handle_phone_audio(self, ws, data: bytes) -> None:
+        if self._audio_source != "phone" or self._phone_ws is not ws or self.muted:
+            return
+        cb = self.on_phone_audio
+        if cb:
+            cb(data)
+
+    def send_phone_audio(self, data: bytes) -> bool:
+        if self._audio_source != "phone" or self._phone_ws is None:
+            return False
+        self.hub.send_bytes_threadsafe(self._phone_ws, data)
+        return True
 
     def tool_event(self, name: str, status: str, ms: int | None = None) -> None:
         self._emit({"t": "tool", "name": name, "status": status, "ms": ms})
@@ -183,6 +235,7 @@ class WebUI:
             "t": "hello",
             "state": self._state,
             "muted": self._muted,
+            "audio_source": self._audio_source,
             "dev_tools": code_execution_allowed(),
             "setup_complete": _config_valida(),
             "history": list(self.history),
@@ -195,11 +248,17 @@ class WebUI:
         from server.app import create_app  # import tardio: evita ciclo
 
         config = uvicorn.Config(
-            create_app(self), host=self.host, port=self.port, log_level="warning"
+            create_app(self),
+            host=self.host,
+            port=self.port,
+            log_level="warning",
+            ssl_certfile=self.ssl_certfile,
+            ssl_keyfile=self.ssl_keyfile,
         )
         self._server = uvicorn.Server(config)
         threading.Thread(target=self._server.run, daemon=True).start()
 
     def run_forever(self) -> None:
         from desktop import run_window
-        run_window(f"http://127.0.0.1:{self.port}")
+        scheme = "https" if self.ssl_certfile and self.ssl_keyfile else "http"
+        run_window(f"{scheme}://127.0.0.1:{self.port}")

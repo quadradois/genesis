@@ -27,3 +27,6 @@ Thumbs.db
 # === Frontend (web UI) ===
 webui/node_modules/
 webui/*.tsbuildinfo
+
+# === Certificados TLS locais ===
+config/tls/

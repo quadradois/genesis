@@ -41,13 +41,38 @@
   --nox-orange: #ff8c42;
   --nox-text: #cde9f5;
   --nox-dim: #5a93ad;
+  --nox-app-height: 100dvh;
+  --nox-browser-bottom: 0px;
+  --nox-bottom-clearance: max(env(safe-area-inset-bottom, 0px), var(--nox-browser-bottom));
 }
 
-html, body, #root { height: 100%; }
+html, body, #root {
+  height: var(--nox-app-height);
+  min-height: var(--nox-app-height);
+}
+
+html {
+  background: var(--nox-bg);
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
   margin: 0;
   background: var(--nox-bg);
   color: var(--nox-text);
   font-family: 'Segoe UI', system-ui, sans-serif;
   overflow: hidden;
+  touch-action: manipulation;
+}
+
+.nox-shell {
+  height: var(--nox-app-height);
+  min-height: var(--nox-app-height);
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.nox-composer {
+  padding-bottom: calc(0.5rem + var(--nox-bottom-clearance));
+  transform: translateZ(0);
 }

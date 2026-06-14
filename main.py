@@ -93,7 +93,7 @@ def _load_system_prompt() -> str:
             "Never simulate or guess results — always call the appropriate tool. "
             "Respond in the same language the user speaks."
         )
-    
+
 _last_memory_input = ""
 _llm_memory_failed = False
 
@@ -540,9 +540,9 @@ TOOL_DECLARATIONS = [
     {
         "name": "crm",
         "description": (
-            "CRM integration. Use for: querying/registering properties (imoveis), "
-            "checking lead status, managing appointments (agendamentos), "
-            "managing clients. Configure URL and token in config/crm_config.json."
+            "Copilot CRM (Quadradois). "
+            "Gerencia ciclo de leads: eventos, leads, atribuicao e WhatsApp. "
+            "Configure URL e chave em config/crm_config.json."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -550,20 +550,25 @@ TOOL_DECLARATIONS = [
                 "action": {
                     "type": "STRING",
                     "description": (
-                        "list_properties | get_property | create_property | "
-                        "update_property | "
-                        "list_leads | get_lead | create_lead | update_lead_status | "
-                        "list_appointments | create_appointment | cancel_appointment | "
-                        "list_clients | get_client | create_client | update_client | "
+                        "list_events | list_leads | get_lead | "
+                        "assign_lead | send_message | list_users | "
                         "custom_query | status"
                     )
                 },
-                "property_id":   {"type": "STRING", "description": "Property/lead/client/appointment ID"},
-                "status":        {"type": "STRING", "description": "New status for lead/cliente"},
-                "data":          {"type": "STRING", "description": "JSON string with the data to create/update"},
-                "filters":       {"type": "STRING", "description": "JSON string with query filters"},
-                "endpoint":      {"type": "STRING", "description": "Custom endpoint path for custom_query"},
-                "method":        {"type": "STRING", "description": "HTTP method for custom_query (GET|POST|PUT|PATCH|DELETE)"},
+                "tenant_id":   {"type": "NUMBER", "description": "Tenant ID (1=Eliezer, 2=Ricardo Rosa, 4=Nnegocios, 14=Atual). Default do config."},
+                "lead_id":     {"type": "NUMBER", "description": "Lead ID"},
+                "user_id":     {"type": "NUMBER", "description": "User ID para atribuicao"},
+                "after_id":    {"type": "NUMBER", "description": "Cursor para eventos (list_events)"},
+                "limit":       {"type": "NUMBER", "description": "Limite por pagina (max 500 events, 100 leads)"},
+                "types":       {"type": "STRING", "description": "Filtrar eventos por tipo (ex: lead.created)"},
+                "page":        {"type": "NUMBER", "description": "Pagina (list_leads)"},
+                "status":      {"type": "STRING", "description": "Filtrar leads por status"},
+                "unassigned":  {"type": "BOOLEAN","description": "Apenas leads nao atribuidos"},
+                "text":        {"type": "STRING", "description": "Texto da mensagem WhatsApp (send_message)"},
+                "idempotency_key": {"type": "STRING", "description": "Idempotency-Key para send_message"},
+                "endpoint":    {"type": "STRING", "description": "Caminho customizado para custom_query"},
+                "method":      {"type": "STRING", "description": "Metodo HTTP para custom_query"},
+                "data":        {"type": "STRING", "description": "JSON com dados para enviar"}
             },
             "required": ["action"]
         }
@@ -585,6 +590,8 @@ class NoxCore:
         self._runtime       = CognitiveRuntime(max_tool_calls=10)
         self._session_started = False
         self.ui.on_text_command = self._on_text_command
+        if hasattr(self.ui, "on_phone_audio"):
+            self.ui.on_phone_audio = self._on_phone_audio
 
     def _on_text_command(self, text: str):
         if not self._loop or not self.session:
@@ -596,6 +603,20 @@ class NoxCore:
             ),
             self._loop
         )
+
+    def _on_phone_audio(self, data: bytes):
+        if not self._loop or not self.session or not self.out_queue:
+            return
+
+        def _put():
+            try:
+                self.out_queue.put_nowait(
+                    {"data": data, "mime_type": "audio/pcm"}
+                )
+            except asyncio.queues.QueueFull:
+                pass
+
+        self._loop.call_soon_threadsafe(_put)
 
     def set_speaking(self, value: bool):
         with self._speaking_lock:
@@ -628,11 +649,14 @@ class NoxCore:
         mem_str    = format_memory_for_prompt(memory)
         sys_prompt = _load_system_prompt()
 
-        now      = datetime.now()
-        time_str = now.strftime("%A, %B %d, %Y — %I:%M %p")
+        now      = datetime.now().astimezone()
+        offset   = now.strftime("%z")
+        tz_label = f"UTC{offset[:3]}" if offset else "UTC"
+        time_str = now.strftime("%A, %B %d, %Y - %I:%M %p")
         time_ctx = (
             f"[CURRENT DATE & TIME]\n"
-            f"Right now it is: {time_str}\n"
+            f"Right now it is: {time_str} ({tz_label})\n"
+            f"All times in this conversation are in {tz_label} unless stated otherwise.\n"
             f"Use this to calculate exact times for reminders.\n\n"
         )
 
@@ -805,49 +829,48 @@ class NoxCore:
             elif name == "crm":
                 action = args.get("action", "status")
                 data = None
-                filters = None
                 if args.get("data"):
                     try: data = json.loads(args["data"])
                     except: data = {"raw": args["data"]}
-                if args.get("filters"):
-                    try: filters = json.loads(args["filters"])
-                    except: filters = {"q": args["filters"]}
 
-                if action == "list_properties":
-                    r = await loop.run_in_executor(None, lambda: crm.list_properties(filters))
-                elif action == "get_property":
-                    r = await loop.run_in_executor(None, lambda: crm.get_property(args.get("property_id", "")))
-                elif action == "create_property":
-                    r = await loop.run_in_executor(None, lambda: crm.create_property(data or {}))
-                elif action == "update_property":
-                    r = await loop.run_in_executor(None, lambda: crm.update_property(args.get("property_id", ""), data or {}))
+                tid = args.get("tenant_id")
+                lid = args.get("lead_id")
+
+                if action == "list_events":
+                    r = await loop.run_in_executor(None, lambda: crm.list_events(
+                        after_id=args.get("after_id", 0),
+                        limit=args.get("limit", 100),
+                        types=args.get("types", "lead.created"),
+                        tenant_id=tid,
+                    ))
                 elif action == "list_leads":
-                    r = await loop.run_in_executor(None, lambda: crm.list_leads(filters))
+                    r = await loop.run_in_executor(None, lambda: crm.list_leads(
+                        tenant_id=tid,
+                        page=args.get("page", 1),
+                        per_page=args.get("limit", 50),
+                        status=args.get("status", ""),
+                        unassigned=args.get("unassigned", False),
+                    ))
                 elif action == "get_lead":
-                    r = await loop.run_in_executor(None, lambda: crm.get_lead(args.get("property_id", "")))
-                elif action == "create_lead":
-                    r = await loop.run_in_executor(None, lambda: crm.create_lead(data or {}))
-                elif action == "update_lead_status":
-                    r = await loop.run_in_executor(None, lambda: crm.update_lead_status(args.get("property_id", ""), args.get("status", "")))
-                elif action == "list_appointments":
-                    r = await loop.run_in_executor(None, lambda: crm.list_appointments(filters))
-                elif action == "create_appointment":
-                    r = await loop.run_in_executor(None, lambda: crm.create_appointment(data or {}))
-                elif action == "cancel_appointment":
-                    r = await loop.run_in_executor(None, lambda: crm.cancel_appointment(args.get("property_id", "")))
-                elif action == "list_clients":
-                    r = await loop.run_in_executor(None, lambda: crm.list_clients(filters))
-                elif action == "get_client":
-                    r = await loop.run_in_executor(None, lambda: crm.get_client(args.get("property_id", "")))
-                elif action == "create_client":
-                    r = await loop.run_in_executor(None, lambda: crm.create_client(data or {}))
-                elif action == "update_client":
-                    r = await loop.run_in_executor(None, lambda: crm.update_client(args.get("property_id", ""), data or {}))
+                    r = await loop.run_in_executor(None, lambda: crm.get_lead(
+                        lead_id=lid, tenant_id=tid,
+                    ))
+                elif action == "assign_lead":
+                    r = await loop.run_in_executor(None, lambda: crm.assign_lead(
+                        lead_id=lid, user_id=args.get("user_id", 0), tenant_id=tid,
+                    ))
+                elif action == "send_message":
+                    r = await loop.run_in_executor(None, lambda: crm.send_message(
+                        lead_id=lid, text=args.get("text", ""),
+                        tenant_id=tid, idempotency_key=args.get("idempotency_key"),
+                    ))
+                elif action == "list_users":
+                    r = await loop.run_in_executor(None, lambda: crm.list_users(tenant_id=tid))
                 elif action == "custom_query":
                     r = await loop.run_in_executor(None, lambda: crm.custom_query(
                         args.get("endpoint", "/"),
                         args.get("method", "GET"),
-                        data
+                        tenant_id=tid, data=data,
                     ))
                 else:
                     r = await loop.run_in_executor(None, lambda: crm.status())
@@ -921,6 +944,9 @@ class NoxCore:
         def callback(indata, frames, time_info, status):
             with self._speaking_lock:
                 nox_speaking = self._is_speaking
+            audio_source = getattr(self.ui, "audio_source", "pc")
+            if audio_source == "phone":
+                return
             if not nox_speaking and not self.ui.muted:
                 data = indata.tobytes()
                 lvl_cb = getattr(self.ui, "on_audio_level", None)
@@ -958,10 +984,21 @@ class NoxCore:
                 async for response in self.session.receive():
 
                     if response.data:
-                        try:
-                            self.audio_in_queue.put_nowait(response.data)
-                        except asyncio.queues.QueueFull:
-                            pass
+                        if getattr(self.ui, "audio_source", "pc") == "phone":
+                            sent = False
+                            send_phone_audio = getattr(self.ui, "send_phone_audio", None)
+                            if send_phone_audio:
+                                sent = bool(send_phone_audio(response.data))
+                            if not sent:
+                                try:
+                                    self.audio_in_queue.put_nowait(response.data)
+                                except asyncio.queues.QueueFull:
+                                    pass
+                        else:
+                            try:
+                                self.audio_in_queue.put_nowait(response.data)
+                            except asyncio.queues.QueueFull:
+                                pass
 
                     if response.server_content:
                         sc = response.server_content
@@ -1103,7 +1140,7 @@ class NoxCore:
                     tg.create_task(self._receive_audio())
                     tg.create_task(self._play_audio())
                     tg.create_task(self._periodic_maintenance())
-                    
+
             except Exception as e:
                 print(f"[NOX] ⚠️ {e}")
                 traceback.print_exc()
@@ -1120,6 +1157,7 @@ def main():
     ap.add_argument("--port", type=int, default=None, help="porta do servidor web (padrão: config web_port ou 8765)")
     ap.add_argument("--no-window", action="store_true", help="não abre janela; só o servidor (acesse pelo navegador)")
     ap.add_argument("--lan", action="store_true", help="expõe na rede Wi-Fi para o celular (mostra URL + QR no terminal)")
+    ap.add_argument("--https", action="store_true", help="serve a Web UI com HTTPS local para liberar microfone mobile")
     args = ap.parse_args()
 
     if args.no_window and args.legacy_ui:
@@ -1130,11 +1168,25 @@ def main():
         ui = NoxUI()
     else:
         from server.web_ui import WebUI
-        ui = WebUI(port=args.port, host="0.0.0.0" if args.lan else "127.0.0.1")
-        print(f"[NOX] Web UI em http://127.0.0.1:{ui.port}")
+        ssl_certfile = None
+        ssl_keyfile = None
+        if args.https:
+            from server.lan import local_ip
+            from server.tls import ensure_local_cert
+            cert, key = ensure_local_cert(local_ip())
+            ssl_certfile = str(cert)
+            ssl_keyfile = str(key)
+        ui = WebUI(
+            port=args.port,
+            host="0.0.0.0" if args.lan else "127.0.0.1",
+            ssl_certfile=ssl_certfile,
+            ssl_keyfile=ssl_keyfile,
+        )
+        scheme = "https" if args.https else "http"
+        print(f"[NOX] Web UI em {scheme}://127.0.0.1:{ui.port}")
         if args.lan:
             from server.lan import print_pairing
-            print_pairing(ui.port)
+            print_pairing(ui.port, scheme)
 
     def runner():
         ui.wait_for_api_key()

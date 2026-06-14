@@ -1,5 +1,6 @@
 """FastAPI da Web UI do Nox: WebSocket de eventos, REST e arquivos estáticos."""
 import asyncio
+import json
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -60,12 +61,30 @@ def create_app(ui) -> FastAPI:
         try:
             await ws.send_json(ui.hello())
             while True:
-                data = await ws.receive_json()
+                frame = await ws.receive()
+                if frame.get("type") == "websocket.disconnect":
+                    break
+                if "bytes" in frame and frame["bytes"] is not None:
+                    ui.handle_phone_audio(ws, frame["bytes"])
+                    continue
+                if "text" not in frame or frame["text"] is None:
+                    continue
+                try:
+                    data = json.loads(frame["text"])
+                except json.JSONDecodeError:
+                    continue
                 t = data.get("t")
                 if t == "message":
                     ui._handle_user_text(data.get("text", ""))
                 elif t == "mute":
                     ui.muted = bool(data.get("muted"))
+                elif t == "audio_source":
+                    ok = ui.set_audio_source(data.get("source", "pc"), ws)
+                    if not ok:
+                        await ws.send_json({
+                            "t": "err",
+                            "message": "phone audio already active on another client",
+                        })
                 elif t == "dev_tools":
                     from memory.config_manager import set_code_execution_allowed
                     enabled = bool(data.get("enabled"))
@@ -79,6 +98,7 @@ def create_app(ui) -> FastAPI:
         except WebSocketDisconnect:
             pass
         finally:
+            ui.release_audio_source(ws)
             await ui.hub.unregister(ws)
 
     # ---------- REST ----------

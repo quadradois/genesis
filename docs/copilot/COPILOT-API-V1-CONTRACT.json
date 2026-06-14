@@ -1,0 +1,349 @@
+{
+  "name": "Quadradois Copilot API v1",
+  "version": "1.0.0",
+  "status": "production-ready",
+  "scope": "lead_workflow_only",
+  "api_url": "https://api.quadradois.com.br/api/copilot/v1",
+  "api_key": "cpk_REPLACE_WITH_PRODUCTION_KEY",
+  "timeout": 30,
+  "auth": {
+    "type": "bearer",
+    "header": "Authorization",
+    "value_template": "Bearer ${COPILOT_API_KEY}",
+    "key_prefix": "cpk_"
+  },
+  "headers": {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer ${COPILOT_API_KEY}"
+  },
+  "tenant_header": {
+    "name": "X-Tenant-Id",
+    "required_for": [
+      "leads.list",
+      "leads.get",
+      "leads.assign",
+      "users.list",
+      "messages.send_to_lead"
+    ],
+    "not_required_for": [
+      "events.list"
+    ],
+    "example_values": {
+      "1": "Eliezer Barbosa Imoveis",
+      "2": "Ricardo Rosa",
+      "4": "Nnegocios",
+      "14": "Atual Imoveis"
+    }
+  },
+  "endpoints": {
+    "events": {
+      "list": {
+        "method": "GET",
+        "path": "/events",
+        "permission": "events:read",
+        "tenant_scoped": false,
+        "query": {
+          "after_id": {
+            "type": "integer",
+            "required": false,
+            "default": 0,
+            "description": "Cursor local do Agent OS. Enviar o ultimo last_id recebido."
+          },
+          "limit": {
+            "type": "integer",
+            "required": false,
+            "default": 100,
+            "maximum": 500
+          },
+          "types": {
+            "type": "string",
+            "required": false,
+            "example": "lead.created"
+          },
+          "tenant_id": {
+            "type": "integer",
+            "required": false,
+            "description": "Filtro opcional de tenant. Nao substitui X-Tenant-Id em rotas tenant-scoped."
+          }
+        },
+        "response_200": {
+          "success": true,
+          "data": {
+            "events": [
+              {
+                "id": 245,
+                "event_type": "lead.created",
+                "schema_version": 1,
+                "tenant_id": 1,
+                "resource_type": "lead",
+                "resource_id": 123,
+                "payload": {
+                  "lead_id": 123,
+                  "tenant_id": 1,
+                  "source": "site"
+                },
+                "created_at": "2026-06-12T04:49:24.779000+00:00"
+              }
+            ],
+            "last_id": 245
+          }
+        }
+      }
+    },
+    "leads": {
+      "list": {
+        "method": "GET",
+        "path": "/leads",
+        "permission": "leads:read",
+        "tenant_scoped": true,
+        "query": {
+          "page": {
+            "type": "integer",
+            "required": false,
+            "default": 1
+          },
+          "per_page": {
+            "type": "integer",
+            "required": false,
+            "default": 50,
+            "maximum": 100
+          },
+          "status": {
+            "type": "string",
+            "required": false
+          },
+          "assigned_to": {
+            "type": "integer",
+            "required": false
+          },
+          "unassigned": {
+            "type": "boolean_string",
+            "required": false,
+            "example": "true"
+          }
+        },
+        "response_200": {
+          "success": true,
+          "data": {
+            "leads": [
+              {
+                "id": 123,
+                "lead_code": "L-000123",
+                "full_name": "Nome do Lead",
+                "email": "lead@example.com",
+                "phone": "+5511999999999",
+                "status": "novo",
+                "classification": null,
+                "score": null,
+                "source": "site",
+                "assigned_user_id": null,
+                "created_at": "2026-06-12T04:49:24.779000+00:00"
+              }
+            ],
+            "total": 1,
+            "page": 1,
+            "per_page": 50
+          }
+        }
+      },
+      "get": {
+        "method": "GET",
+        "path": "/leads/{lead_id}",
+        "permission": "leads:read",
+        "tenant_scoped": true,
+        "path_params": {
+          "lead_id": {
+            "type": "integer",
+            "required": true
+          }
+        },
+        "response_200": {
+          "success": true,
+          "data": {
+            "id": 123,
+            "lead_code": "L-000123",
+            "full_name": "Nome do Lead",
+            "email": "lead@example.com",
+            "phone": "+5511999999999",
+            "status": "novo",
+            "classification": null,
+            "score": null,
+            "source": "site",
+            "assigned_user_id": null,
+            "created_at": "2026-06-12T04:49:24.779000+00:00",
+            "activities": [
+              {
+                "id": 987,
+                "activity_type": "whatsapp",
+                "title": "Mensagem enviada pelo Copilot (Agent OS)",
+                "description": "Texto enviado",
+                "created_at": "2026-06-12T04:50:00.000000+00:00"
+              }
+            ]
+          }
+        }
+      },
+      "assign": {
+        "method": "POST",
+        "path": "/leads/{lead_id}/assign",
+        "permission": "leads:assign",
+        "tenant_scoped": true,
+        "path_params": {
+          "lead_id": {
+            "type": "integer",
+            "required": true
+          }
+        },
+        "body": {
+          "user_id": {
+            "type": "integer",
+            "required": true
+          }
+        },
+        "response_200": {
+          "success": true,
+          "data": {
+            "lead_id": 123,
+            "assigned_user_id": 45
+          }
+        }
+      }
+    },
+    "users": {
+      "list": {
+        "method": "GET",
+        "path": "/users",
+        "permission": "users:read",
+        "tenant_scoped": true,
+        "response_200": {
+          "success": true,
+          "data": {
+            "users": [
+              {
+                "id": 45,
+                "username": "corretor",
+                "email": "corretor@example.com",
+                "primary_role": "broker"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "messages": {
+      "send_to_lead": {
+        "method": "POST",
+        "path": "/leads/{lead_id}/message",
+        "permission": "messages:send",
+        "tenant_scoped": true,
+        "headers": {
+          "Idempotency-Key": {
+            "type": "string",
+            "required": true,
+            "description": "Use uma chave unica por tentativa logica de mensagem. Reusar a mesma chave com o mesmo body nao reenvia WhatsApp."
+          }
+        },
+        "path_params": {
+          "lead_id": {
+            "type": "integer",
+            "required": true
+          }
+        },
+        "body": {
+          "text": {
+            "type": "string",
+            "required": true,
+            "min_length": 1
+          }
+        },
+        "response_200": {
+          "success": true,
+          "data": {
+            "lead_id": 123,
+            "instance": "whatsapp-instance-name"
+          }
+        }
+      }
+    },
+    "properties": {
+      "status": "not_available_in_v1",
+      "planned_wave": "wave_2",
+      "replacement_for_now": null
+    },
+    "appointments": {
+      "status": "not_available_in_v1",
+      "planned_wave": "wave_3",
+      "replacement_for_now": null
+    },
+    "clients": {
+      "status": "not_available_in_v1",
+      "planned_wave": "future",
+      "replacement_for_now": "leads"
+    }
+  },
+  "response_envelope": {
+    "success": {
+      "success": true,
+      "data": {}
+    },
+    "error": {
+      "success": false,
+      "error": "Mensagem de erro"
+    }
+  },
+  "status_codes": {
+    "200": "Sucesso",
+    "401": "Chave ausente, invalida, inativa ou expirada",
+    "403": "Chave valida sem a permissao exigida",
+    "404": "Recurso nao existe no tenant informado",
+    "409": "Estado nao permite a acao ou Idempotency-Key reutilizada com body diferente",
+    "422": "Payload, path param ou header invalido",
+    "429": "Rate limit de mensagens excedido",
+    "500": "Erro inesperado no CRM",
+    "502": "Falha transitoria no provedor downstream de WhatsApp"
+  },
+  "retry_policy": {
+    "events.list": {
+      "retry": true,
+      "safe": true,
+      "cursor_rule": "Persistir data.last_id apenas depois de processar todos os eventos retornados."
+    },
+    "messages.send_to_lead": {
+      "retry": true,
+      "safe_when_same_idempotency_key": true,
+      "retry_statuses": [
+        429,
+        500,
+        502
+      ],
+      "do_not_retry_statuses": [
+        401,
+        403,
+        404,
+        409,
+        422
+      ]
+    },
+    "leads.assign": {
+      "retry": true,
+      "safe_if_same_body": true,
+      "retry_statuses": [
+        500
+      ]
+    }
+  },
+  "agent_os_flow": {
+    "poll_events": {
+      "endpoint": "events.list",
+      "interval_seconds": 15,
+      "initial_after_id": 0,
+      "event_handlers": {
+        "lead.created": [
+          "call leads.get with event.resource_id and X-Tenant-Id = event.tenant_id",
+          "decide assignment or message action",
+          "optionally call users.list, leads.assign, messages.send_to_lead"
+        ]
+      }
+    }
+  }
+}

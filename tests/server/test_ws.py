@@ -14,6 +14,11 @@ class FakeWS:
             raise RuntimeError("conexão morta")
         self.sent.append(payload)
 
+    async def send_bytes(self, data):
+        if self.fail:
+            raise RuntimeError("conexão morta")
+        self.sent.append(data)
+
 
 def test_broadcast_sem_loop_nao_explode():
     hub = Hub()
@@ -48,4 +53,22 @@ def test_broadcast_de_outra_thread_entrega():
                 break
             await asyncio.sleep(0.01)
         assert ok.sent == [{"t": "viz", "level": 0.5}]
+    asyncio.run(run())
+
+
+def test_send_bytes_threadsafe_entrega_para_conexao_especifica():
+    async def run():
+        hub = Hub()
+        hub.attach_loop(asyncio.get_running_loop())
+        ok = FakeWS()
+        other = FakeWS()
+        await hub.register(ok)
+        await hub.register(other)
+        hub.send_bytes_threadsafe(ok, b"pcm")
+        for _ in range(50):
+            if ok.sent:
+                break
+            await asyncio.sleep(0.01)
+        assert ok.sent == [b"pcm"]
+        assert other.sent == []
     asyncio.run(run())

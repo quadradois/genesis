@@ -1,15 +1,19 @@
 {
-    "api_url": "https://seudominio.com/api/v1",
-    "api_key": "",
-    "headers": {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer SUA_CHAVE_AQUI"
-    },
-    "endpoints": {
-        "properties":  "/imoveis",
-        "leads":       "/leads",
-        "appointments":"/agendamentos",
-        "clients":     "/clientes"
-    },
-    "timeout": 30
+  "api_url": "https://api.quadradois.com.br/api/copilot/v1",
+  "api_key": "cpk_SUA_CHAVE_AQUI",
+  "headers": {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer ${COPILOT_API_KEY}"
+  },
+  "tenant_header": "X-Tenant-Id",
+  "default_tenant_id": 1,
+  "endpoints": {
+    "events": "/events",
+    "leads": "/leads",
+    "lead_detail": "/leads/{lead_id}",
+    "lead_assign": "/leads/{lead_id}/assign",
+    "lead_message": "/leads/{lead_id}/message",
+    "users": "/users"
+  },
+  "timeout": 30
 }

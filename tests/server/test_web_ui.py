@@ -6,9 +6,13 @@ from server.web_ui import WebUI, parse_log_line, _fmt_size
 class FakeHub:
     def __init__(self):
         self.events = []
+        self.bytes_sent = []
 
     def broadcast(self, payload):
         self.events.append(payload)
+
+    def send_bytes_threadsafe(self, ws, data):
+        self.bytes_sent.append((ws, data))
 
 
 def make_ui():
@@ -128,3 +132,18 @@ def test_on_audio_level_throttla_mas_zera_sempre(monkeypatch):
     ui.on_audio_level(0.0)   # zero passa sempre
     viz = [e for e in hub.events if e["t"] == "viz"]
     assert [v["level"] for v in viz] == [0.5, 0.7, 0.0]
+
+
+def test_audio_source_phone_roteia_bytes_e_libera():
+    ui, hub = make_ui()
+    ws = object()
+    got = {}
+    ui.on_phone_audio = lambda data: got.update(data=data)
+    assert ui.set_audio_source("phone", ws) is True
+    assert ui.audio_source == "phone"
+    ui.handle_phone_audio(ws, b"mic")
+    assert got["data"] == b"mic"
+    assert ui.send_phone_audio(b"tts") is True
+    assert hub.bytes_sent == [(ws, b"tts")]
+    ui.release_audio_source(ws)
+    assert ui.audio_source == "pc"

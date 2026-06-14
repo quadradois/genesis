@@ -29,33 +29,35 @@ export default function App() {
 
   return (
     <SetupGate>
-      <div className="flex h-full flex-col">
-        <header className="flex items-center justify-between border-b border-[#14304a] px-4 py-2">
+      <div className="nox-shell flex flex-col">
+        <header className="shrink-0 flex items-center justify-between border-b border-[#14304a] px-4 py-2">
           <h1 className="text-sm font-semibold tracking-[0.5em] text-cyan-300">N O X</h1>
           <div className="flex items-center gap-4">
             <StateBadge />
             <ConnBadge />
           </div>
         </header>
-        <motion.div
-          layout
-          animate={{ flexBasis: hasChat ? '42%' : '100%' }}
-          transition={{ type: 'spring', stiffness: 120, damping: 22 }}
-          className="min-h-[220px] shrink-0 grow-0"
-          style={{ flexBasis: '100%' }}
-        >
-          <Stage />
-        </motion.div>
-        {hasChat && (
+        <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <motion.div
-            initial={{ opacity: 0, y: 24 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4 }}
-            className="min-h-0 flex-1"
+            layout
+            animate={{ flexBasis: hasChat ? '42%' : '100%' }}
+            transition={{ type: 'spring', stiffness: 120, damping: 22 }}
+            className="min-h-[220px] shrink-0 grow-0"
+            style={{ flexBasis: '100%' }}
           >
-            <ChatPanel />
+            <Stage />
           </motion.div>
-        )}
+          {hasChat && (
+            <motion.div
+              initial={{ opacity: 0, y: 24 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4 }}
+              className="min-h-0 flex-1"
+            >
+              <ChatPanel />
+            </motion.div>
+          )}
+        </main>
         <Composer />
       </div>
     </SetupGate>
